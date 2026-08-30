@@ -65,6 +65,8 @@ if rg -q 'Voice key .* down' "$result_dir/siri-reset-failure.log"; then
   exit 1
 fi
 "$bridge" --stop-start-during-submit-test >"$result_dir/stop-start-during-submit.log" 2>&1
+rg -q 'Ignored AirPods Siri invocation while bridge is stopped' \
+  "$result_dir/stop-start-during-submit.log"
 if [[ $(rg -c 'Voice key fn down' "$result_dir/stop-start-during-submit.log") != 2 ]]; then
   echo "STOP-START DURING SUBMIT TEST FAILED: stale per-session state blocked the second start" >&2
   exit 1

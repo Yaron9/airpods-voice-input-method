@@ -306,6 +306,7 @@ private final class AirPodsVoiceController {
             }
         }
         guard watchLogs else {
+            lastInvocation = .distantPast
             isRunning = true
             writeLog("AirPods voice bridge ready in replay mode; voiceKey=\(voiceKey.name)")
             return true
@@ -331,6 +332,7 @@ private final class AirPodsVoiceController {
             try process.run()
             logProcess = process
             logPipe = pipe
+            lastInvocation = .distantPast
             isRunning = true
             writeLog("AirPods voice bridge active; voiceKey=\(voiceKey.name); start=AirPods long press; stop=AirPods single press")
             return true
@@ -350,7 +352,6 @@ private final class AirPodsVoiceController {
         releaseTimer = nil
         submitTimer = nil
         busy = false
-        lastInvocation = .distantPast
         targetApplication = nil
         if voiceKeyIsDown {
             _ = postVoiceKey(down: false)
@@ -414,6 +415,10 @@ private final class AirPodsVoiceController {
             return
         }
         guard isAirPodsSiriInvocation(line) else { return }
+        guard isRunning else {
+            writeLog("Ignored AirPods Siri invocation while bridge is stopped")
+            return
+        }
         let now = Date()
         let timeSinceLastInvocation = now.timeIntervalSince(lastInvocation)
         if voiceKeyIsDown {
@@ -830,6 +835,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
                 controller.stop()
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) {
+                controller.handleLogLine("STOP-START-STALE \(airPodsHearstMarker)")
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
                 _ = controller.start(watchLogs: false)
