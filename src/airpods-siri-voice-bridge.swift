@@ -544,8 +544,11 @@ private final class AirPodsVoiceController {
         }
         deactivateRemoteStopControls()
         targetApplication = nil
-        busy = false
-        guard submit else { return }
+        busy = submit && resetSiriAfterSubmit
+        guard submit else {
+            busy = false
+            return
+        }
         submitTimer?.invalidate()
         submitTimer = Timer.scheduledTimer(withTimeInterval: finalTextCommitDelay, repeats: false) { [weak self] _ in
             Task { @MainActor in
@@ -606,6 +609,7 @@ private final class AirPodsVoiceController {
                 guard let self else { return }
                 self.submitTimer = nil
                 let resetSucceeded = self.siriSessionReset()
+                self.busy = false
                 writeLog(
                     "Siri session reset after media-routed AirPods stop; "
                         + "success=\(resetSucceeded)")
@@ -859,6 +863,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                 DispatchQueue.main.asyncAfter(deadline: .now() + stop) {
                     if index.isMultiple(of: 2) {
                         controller.handleAirPodsSinglePress()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            controller.handleLogLine(
+                                "CYCLE-\(cycle)-EARLY-RESTART \(airPodsHearstMarker)")
+                        }
                     } else {
                         controller.handleLogLine("CYCLE-\(cycle)-STOP \(airPodsCloseMarker)")
                     }
