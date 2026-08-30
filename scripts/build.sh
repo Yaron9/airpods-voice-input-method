@@ -7,6 +7,8 @@ app_dir="$build_dir/AirPods Siri Voice Bridge.app"
 contents_dir="$app_dir/Contents"
 macos_dir="$contents_dir/MacOS"
 executable="$macos_dir/airpods-siri-voice-bridge"
+target_arch=$(uname -m)
+deployment_target=13.0
 if [[ -n "${AIRPODS_BRIDGE_SIGN_IDENTITY:-}" ]]; then
   sign_identity=$AIRPODS_BRIDGE_SIGN_IDENTITY
 else
@@ -23,10 +25,12 @@ if [[ -z "$sign_identity" ]] || ! security find-identity -v -p codesigning | gre
 fi
 
 clang -Wall -Wextra -Werror -Wno-deprecated-declarations \
+  -mmacosx-version-min="$deployment_target" \
   -c "$project_dir/src/fn-injector.c" \
   -o "$build_dir/fn-injector.o"
 
 swiftc \
+  -target "${target_arch}-apple-macosx${deployment_target}" \
   "$project_dir/src/airpods-siri-voice-bridge.swift" \
   "$build_dir/fn-injector.o" \
   -framework AppKit \
