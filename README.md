@@ -1,6 +1,6 @@
-# AirPods Siri → 微信输入法语音桥接
+# AirPods 单击 → 微信输入法语音桥接
 
-一个原生 macOS 菜单栏 App：长按 AirPods 左耳启动语音输入，单击停止并发送。App 不占用 Dock，只提供运行状态、启动、停止、使用说明和退出。
+一个原生 macOS 菜单栏 App：第一次单击 AirPods 启动语音输入，第二次单击停止并发送。App 不占用 Dock，也不依赖 Siri。
 
 ## 普通用户安装
 
@@ -28,15 +28,9 @@
 
 本项目已经使用微信输入法完成实机验证。其他输入法需要支持“按住快捷键录音，松开快捷键结束”。
 
-### 2. 设置 AirPods 左耳
+### 2. AirPods 单击说明
 
-在 Mac 或 iPhone 的蓝牙设置中打开 AirPods 详情，将：
-
-```text
-按住 AirPods → 左耳 → Siri
-```
-
-设置会随 AirPods 同步。完成后，长按左耳会唤醒 Siri，桥接 App 才能识别这次操作。
+App 运行时会常驻接管 AirPods 的播放/暂停单击：第一次单击开始语音输入，第二次单击停止并发送。因此运行期间不能再用 AirPods 单击控制音乐；停止或退出 App 后，媒体控制会恢复。
 
 ### 3. 授予辅助功能权限
 
@@ -52,25 +46,9 @@ App 必须获得 macOS“辅助功能”权限，才能模拟长按语音键和�
 
 如果系统已经打开开关但 App 仍提示无权限，不要反复删除或添加：直接点击 App 提示框里的“已授权，重新启动”。只有列表中的条目指向旧位置，或者安装了二进制已变化的新版本时，才需要删除旧条目并从 `/Applications` 重新添加。不要授权下载或 `build/` 目录中的临时构建版本。无证书 ad-hoc 版本更新二进制后，macOS 可能要求重新授权；同一版本 PKG 重装不会反复变化。
 
-## 已解决的根因
+## 实现原理
 
-旧实现监听 Siri 的 `#HotKey type: 10/11/12` 日志。它们实际是所有键盘事件的通用 `keyDown/keyUp/flagsChanged`，不是 AirPods 的按下和松开；桥接器自己注入的 Fn 还会再次进入同一日志通道。
-
-真实 AirPods 实体操作在本机留下的稳定调用是：
-
-```text
-SiriNCActionHearstDoubleTap - BluetoothHFP
-```
-
-AirPods 只给 Siri 一次调用，不公开可用的按下/松开对。微信输入法则会忽略普通 `CGEvent` 注入。修复采用五项变化：
-
-1. 只接受 `HearstDoubleTap/Close + BluetoothHFP`，拒绝普通键盘和菜单栏 Siri 调用。
-2. 用 `IOHIDPostEvent` 发送真正的 Fn modifier `NX_FLAGSCHANGED + NX_SECONDARYFNMASK`。注入时保留用户正在按住的 Shift/Cmd/Option/Ctrl。
-3. 录音期间通过 `MPRemoteCommandCenter` 临时接管 AirPods 单击；停止后立即归还媒体控制，避免误启动 Music。
-4. 每轮启动时向 Siri 宿主发送 Escape，让 Siri 走正常关闭流程；只有观察到 BTLEServerAgent 的 `DoAPSiri AudioDidStop` 后才注入 Fn。
-5. 单击停止由媒体控制接收并自动发送；由于启动阶段已经完成 `StopStreaming`，结束后不再杀死或重启 Siri，下一次长按仍是全新的 AirPods 会话。
-
-旧方案结束 `Siri`/`SiriNCService` 进程，虽然释放了麦克风，却绕过了 Siri 的正常关闭回调，让 AirPods 的 DoAP 会话停在 `Stream Ready`；下一次长按会在到达桥接器之前被系统吞掉。现在桥接器保留 Siri 宿主，通过 Escape 触发正式 dismissal，并等待系统发出 `AudioDidStop → StopStreaming` 后恢复原应用焦点和启动语音输入。这是连续多轮可用的关键。
+App 在运行期间通过 `MPRemoteCommandCenter` 持有 Now Playing 会话，从媒体系统接收 AirPods 单击；同时使用 IOHID 作为备用监听，并用 350ms 去重窗口合并同一次实体操作。第一次单击通过 `IOHIDPostEvent` 按下真正的 Fn modifier，第二次单击释放 Fn，并依次发送两次回车完成输入法确认与消息发送。整个流程不启动、关闭或监听 Siri。
 
 ## 高级：配置其他语音按键
 
@@ -126,12 +104,12 @@ MacBook 菜单栏图标过多时，部分图标会被摄像头刘海遮住。App
 
 不要把图标拖出菜单栏；拖出代表移除并退出 App。macOS 没有允许普通 App 强制抢占最右侧位置的公开接口，因此本项目不使用可能影响稳定性和 App Store 审核的私有 API。
 
-- 第一次长按 AirPods：启动语音输入。
-- 单击 AirPods：结束语音输入，先用一次回车确认输入法组合文字，再用第二次回车发送。
+- 第一次单击 AirPods：启动语音输入。
+- 第二次单击 AirPods：结束语音输入，先用一次回车确认输入法组合文字，再用第二次回车发送。
 - 停止桥接器：`./scripts/stop.sh`
 - 启动脚本通过当前图形会话的 `launchd` 托管桥接器；关闭终端或开发工具不会导致桥接器退出。
 - 源码启动脚本会优先复用 PKG 已安装到 `/Applications` 的正式 App，且不会尝试覆盖它；尚未安装 PKG 时才运行 `build/` 中的开发副本。
-- 长按 AirPods 后会关闭 Siri，重新激活触发前的应用并恢复输入焦点，然后持续按住配置的语音键；录音期间单击 AirPods 会释放该键、结束输入并发送回车。
+- 第一次单击后持续按住配置的语音键；第二次单击会释放该键、结束输入并发送回车。
 - 只有主动单击停止且原应用仍保持焦点时才发送回车；切换焦点、安全超时或桥接器退出时不会误发送。
 - 使用微信输入法时，若它自行结束录音，桥接器也会立即释放语音键。
 - 语音键最长保持 60 秒，避免异常情况下按键永久卡住。
@@ -169,29 +147,30 @@ AIRPODS_BRIDGE_INSTALLER_SIGN_IDENTITY="Developer ID Installer: …" \
 
 ```bash
 ./tests/run-regression.sh
+./tests/run-single-click-e2e.sh
 ```
 
 回归测试包括：
 
-- 普通 `#HotKey`、键盘 Siri、菜单栏 Siri 均不会被识别为 AirPods。
 - 测试开始时显式选择微信输入法，避免当前输入源为 ABC 时产生假阴性。
-- 回放本机真实 AirPods 事件签名。
-- 使用默认配置通过 HID 层保持 Fn 2 秒，并从 WeType 系统日志验证录音确实 `startRunning` 和 `stopRunning`。
+- 连续四轮“单击开始、单击停止并发送”，并断言桥接日志中没有 Siri/DoAP 参与。
+- 使用默认配置通过 HID 层保持 Fn，并从 WeType 系统日志验证录音确实 `startRunning` 和 `stopRunning`。
 - 验证所有支持的按键名称、大小写归一化、默认值和非法配置拒绝逻辑。
 - 使用独立前台接收器验证主动停止后确实收到 Return `keyCode 36`，并验证异常退出清理时不注入回车。
-- 连续回放四轮真实 AirPods 事件组合：`HearstDoubleTap/Close` 启动与媒体/Siri 两种单击停止路径交替出现；每次启动都必须正常 dismiss Siri 并等到 DoAP `AudioDidStop`，从微信输入法系统日志验证录音启动和停止，并由前台接收器确认两次 Return 已完成发送。
-- 验证录音期间单击若被 macOS 路由成 Siri `Close`，仍会和媒体单击一样停止并发送，不会只停止而漏发回车。
+- 使用独立媒体探针验证空闲状态的 Now Playing 会话能接管实体 AirPods 单击，且不会启动原媒体。
 - 在语音键按住期间发送 stop request，验证进程优雅退出前一定补发 key-up。
 
 `--self-test` 使用 2 秒按住模式，测试结束后不会遗留录音；生产模式持续按住配置键，直到 AirPods 单击停止。
 
 ## 文件
 
-- `src/airpods-siri-voice-bridge.swift`：AirPods 事件过滤、Siri 音频释放和状态机。
+- `src/airpods-siri-voice-bridge.swift`：AirPods 单击接管、去重和语音输入状态机。
 - `src/fn-injector.c`：IOHIDSystem Fn modifier 注入。
 - `config/voice-key`：语音输入法激活键配置。
 - `scripts/build.sh`：构建。
 - `scripts/start.sh` / `scripts/stop.sh`：通过 `launchd` 持久启动，并在停止时执行 Fn 释放清理。
 - `tests/run-regression.sh`：端到端回归测试。
 - `tests/run-multicycle-e2e.sh`：四轮 AirPods 行为仿真，验证每轮微信录音启动、停止和发送。
+- `tests/run-single-click-e2e.sh`：四轮无 Siri 单击启动/停止/发送回归。
+- `tests/media-single-click-probe.swift`：实体 AirPods 空闲单击媒体接管探针。
 - `tests/hitl-two-cycle.sh`：需要实体 AirPods 时使用的两轮实时验收脚本。
