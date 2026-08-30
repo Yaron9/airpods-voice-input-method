@@ -57,6 +57,13 @@ swiftc "$project_dir/tests/return-key-receiver.swift" -framework AppKit \
   -o "$result_dir/return-key-receiver"
 "$bridge" --parser-test
 "$bridge" --permission-recovery-test
+"$bridge" --siri-reset-failure-test >"$result_dir/siri-reset-failure.log" 2>&1
+rg -q 'Voice input start aborted; replacement Siri host was not ready' \
+  "$result_dir/siri-reset-failure.log"
+if rg -q 'Voice key .* down' "$result_dir/siri-reset-failure.log"; then
+  echo "SIRI RESET FAILURE TEST FAILED: voice input started without a ready Siri host" >&2
+  exit 1
+fi
 
 "$project_dir/tests/run-multicycle-e2e.sh"
 multicycle_log=/tmp/airpods-fn-test/multicycle-e2e/bridge.log
@@ -248,6 +255,7 @@ wait "$preferred_pid"
 rg -q 'Closing lower-priority app copy' "$result_dir/preferred-copy.log"
 
 echo "REGRESSION PASSED: AirPods long press -> Siri release -> HID Fn hold -> AirPods single press stop"
+echo "SIRI RESET GUARD PASSED: voice input is blocked until a replacement Siri host is ready"
 echo "RETURN DELIVERY PASSED: frontmost application received commit + send Return sequence"
 echo "SIRI STOP SUBMIT PASSED: Siri-routed AirPods stop also submitted voice input"
 echo "LONG-PRESS SAFETY PASSED: a second long press stopped without submitting"

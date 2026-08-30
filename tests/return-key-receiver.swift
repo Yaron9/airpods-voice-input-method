@@ -22,6 +22,10 @@ private final class ReturnKeyView: NSView {
             return
         }
         returnCount += 1
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        let frontPID = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0
+        fputs("Return received; count=\(returnCount); ownPID=\(ownPID); frontPID=\(frontPID)\n", stdout)
+        fflush(stdout)
         guard returnCount == 2 else { return }
         returnCount = 0
         completedCycles += 1
