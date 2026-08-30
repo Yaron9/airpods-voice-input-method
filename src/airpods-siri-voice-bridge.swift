@@ -454,11 +454,9 @@ private final class AirPodsVoiceController {
     func handleAirPodsSinglePress() {
         writeLog("AirPods single press received; recording=\(voiceKeyIsDown)")
         guard voiceKeyIsDown else { return }
-        endVoiceKeyHold(reason: "AirPods single press", submit: true)
-        let resetSucceeded = siriSessionReset()
-        writeLog(
-            "Siri session reset after media-routed AirPods stop; "
-                + "success=\(resetSucceeded)")
+        endVoiceKeyHold(
+            reason: "AirPods single press", submit: true,
+            resetSiriAfterSubmit: true)
     }
 
     func testReturnDelivery() {
@@ -533,7 +531,9 @@ private final class AirPodsVoiceController {
         }
     }
 
-    private func endVoiceKeyHold(reason: String, submit: Bool = false) {
+    private func endVoiceKeyHold(
+        reason: String, submit: Bool = false, resetSiriAfterSubmit: Bool = false
+    ) {
         releaseTimer?.invalidate()
         releaseTimer = nil
         let submitApplication = targetApplication
@@ -549,18 +549,22 @@ private final class AirPodsVoiceController {
         submitTimer?.invalidate()
         submitTimer = Timer.scheduledTimer(withTimeInterval: finalTextCommitDelay, repeats: false) { [weak self] _ in
             Task { @MainActor in
-                self?.submitVoiceInputIfFocusIsSafe(to: submitApplication)
+                self?.submitVoiceInputIfFocusIsSafe(
+                    to: submitApplication,
+                    resetSiriAfterSubmit: resetSiriAfterSubmit)
             }
         }
     }
 
     private func submitVoiceInputIfFocusIsSafe(
-        to application: NSRunningApplication?, sendStage: Bool = false
+        to application: NSRunningApplication?, sendStage: Bool = false,
+        resetSiriAfterSubmit: Bool = false
     ) {
         submitTimer = nil
         guard let application, !application.isTerminated,
               NSWorkspace.shared.frontmostApplication?.processIdentifier == application.processIdentifier else {
             writeLog("Return key skipped; original target no longer has focus")
+            scheduleSiriResetAfterSubmissionIfNeeded(resetSiriAfterSubmit)
             return
         }
         guard let source = CGEventSource(stateID: .hidSystemState),
@@ -573,6 +577,7 @@ private final class AirPodsVoiceController {
                   virtualKey: CGKeyCode(returnKeyCode),
                   keyDown: false) else {
             writeLog("Return key failed; could not create CGEvent")
+            scheduleSiriResetAfterSubmissionIfNeeded(resetSiriAfterSubmit)
             return
         }
         keyDown.flags = []
@@ -581,12 +586,29 @@ private final class AirPodsVoiceController {
         keyUp.post(tap: .cghidEventTap)
         if sendStage {
             writeLog("Return key posted; stage=send; voice input submitted")
+            scheduleSiriResetAfterSubmissionIfNeeded(resetSiriAfterSubmit)
             return
         }
         writeLog("Return key posted; stage=commit")
         submitTimer = Timer.scheduledTimer(withTimeInterval: finalSendDelay, repeats: false) { [weak self] _ in
             Task { @MainActor in
-                self?.submitVoiceInputIfFocusIsSafe(to: application, sendStage: true)
+                self?.submitVoiceInputIfFocusIsSafe(
+                    to: application, sendStage: true,
+                    resetSiriAfterSubmit: resetSiriAfterSubmit)
+            }
+        }
+    }
+
+    private func scheduleSiriResetAfterSubmissionIfNeeded(_ needed: Bool) {
+        guard needed else { return }
+        submitTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.submitTimer = nil
+                let resetSucceeded = self.siriSessionReset()
+                writeLog(
+                    "Siri session reset after media-routed AirPods stop; "
+                        + "success=\(resetSucceeded)")
             }
         }
     }
@@ -811,8 +833,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSApp.terminate(nil)
             }
         } else if cycleTest {
-            let holdDuration = duplicateWindow + 0.2
-            let cycleInterval = 2.6
+            // A real Siri replacement can consume the full retry window before
+            // Fn goes down. Keep replay stops well after that worst case.
+            let holdDuration = 4.0
+            let cycleInterval = 5.8
             let starts = [
                 airPodsHearstMarker, airPodsCloseMarker,
                 airPodsHearstMarker, airPodsCloseMarker,
