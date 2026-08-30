@@ -21,6 +21,8 @@ private let stopRequestURL = URL(fileURLWithPath:
         ?? "/tmp/airpods-voice-input-method/stop.request")
 private let finalTextCommitDelay: TimeInterval = 0.50
 private let finalSendDelay: TimeInterval = 0.25
+private let focusRecoveryRetryInterval: TimeInterval = 0.10
+private let maximumFocusRecoveryRetries = 10
 private let singlePressDuplicateWindow: TimeInterval = 0.35
 private let maximumFnHoldDuration: TimeInterval = 60.0
 private let consumerUsagePage: UInt32 = 0x0c
@@ -467,13 +469,36 @@ private final class AirPodsVoiceController {
     }
 
     private func submitVoiceInputIfFocusIsSafe(
-        to application: NSRunningApplication?, sendStage: Bool = false
+        to application: NSRunningApplication?, sendStage: Bool = false,
+        focusRetriesRemaining: Int = maximumFocusRecoveryRetries
     ) {
         submitTimer = nil
-        guard let application, !application.isTerminated,
-              NSWorkspace.shared.frontmostApplication?.processIdentifier == application.processIdentifier else {
-            writeLog("Return key skipped; original target no longer has focus")
+        guard let application, !application.isTerminated else {
+            writeLog("Return key skipped; original target is no longer running")
             busy = false
+            return
+        }
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier
+                == application.processIdentifier else {
+            guard focusRetriesRemaining > 0 else {
+                writeLog("Return key skipped; original target did not regain focus")
+                busy = false
+                return
+            }
+            if focusRetriesRemaining == maximumFocusRecoveryRetries {
+                let stage = sendStage ? "send" : "commit"
+                writeLog("Waiting for original target to regain focus; stage=\(stage)")
+            }
+            submitTimer = Timer.scheduledTimer(
+                withTimeInterval: focusRecoveryRetryInterval, repeats: false
+            ) { [weak self] _ in
+                Task { @MainActor in
+                    self?.submitVoiceInputIfFocusIsSafe(
+                        to: application,
+                        sendStage: sendStage,
+                        focusRetriesRemaining: focusRetriesRemaining - 1)
+                }
+            }
             return
         }
         guard let source = CGEventSource(stateID: .hidSystemState),
