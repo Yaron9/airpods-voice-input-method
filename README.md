@@ -42,6 +42,8 @@ App 运行时会接管 AirPods 的播放/暂停单击：
 3. App 会安装到 `/Applications/AirPods Voice 输入法.app`。
 4. 从系统“应用程序”目录打开 **AirPods Voice 输入法**。
 
+1.0 安装器会自动停止并移除以前的测试版，避免两个版本同时接管 AirPods。
+
 当前 GitHub 安装包使用 ad-hoc 签名，适合源码发布和直接分发。如果 macOS 阻止首次打开，请在 Finder 中右键 App，选择“打开”，再确认一次。
 
 ## 辅助功能权限

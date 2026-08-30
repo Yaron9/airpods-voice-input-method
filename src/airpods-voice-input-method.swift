@@ -26,6 +26,7 @@ private let maximumFnHoldDuration: TimeInterval = 60.0
 private let consumerUsagePage: UInt32 = 0x0c
 private let playPauseUsage: UInt32 = 0xcd
 private let bluetoothMediaRemoteSender = "SenderBundleIdentifier = <com.apple.bluetoothd>"
+private let legacyBundleIdentifier = "com.yaron.airpods-siri-voice-bridge"
 private let returnKeyCode: UInt16 = 36
 private let logDateFormatter: ISO8601DateFormatter = {
     let formatter = ISO8601DateFormatter()
@@ -189,6 +190,11 @@ private func mediaRemoteSourceID(_ event: MPRemoteCommandEvent) -> String? {
     let selector = NSSelectorFromString("sourceID")
     guard object.responds(to: selector) else { return nil }
     return object.value(forKey: "sourceID") as? String
+}
+
+private func processIsRunning(_ pid: pid_t) -> Bool {
+    errno = 0
+    return kill(pid, 0) == 0 || errno != ESRCH
 }
 
 @MainActor
@@ -649,7 +655,12 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         let singleClickCycleTest = CommandLine.arguments.contains("--single-click-cycle-test")
         let replayTest = selfTest || returnTest || stopStartDuringSubmitTest
             || singleClickCycleTest
-        if !replayTest, !enforcePreferredInstance() { return }
+        if !replayTest {
+            guard stopLegacyVersion(), enforcePreferredInstance() else {
+                NSApp.terminate(nil)
+                return
+            }
+        }
 
         let stopRequestTimer = Timer(timeInterval: 0.1, repeats: true) { _ in
             guard FileManager.default.fileExists(atPath: stopRequestURL.path) else { return }
@@ -738,6 +749,25 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         stopRequestTimer?.invalidate()
         controller?.stop()
+    }
+
+    private func stopLegacyVersion() -> Bool {
+        let legacyApps = NSRunningApplication.runningApplications(
+            withBundleIdentifier: legacyBundleIdentifier)
+            .filter { !$0.isTerminated }
+        guard !legacyApps.isEmpty else { return true }
+        writeLog("Stopping pre-1.0 app before starting the renamed 1.0 release")
+        let legacyPIDs = legacyApps.map(\.processIdentifier)
+        for app in legacyApps { _ = app.terminate() }
+        let deadline = Date().addingTimeInterval(3)
+        while legacyPIDs.contains(where: processIsRunning), Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        guard legacyPIDs.allSatisfy({ !processIsRunning($0) }) else {
+            writeLog("Pre-1.0 app did not stop; refusing to start a duplicate controller")
+            return false
+        }
+        return true
     }
 
     private func enforcePreferredInstance() -> Bool {

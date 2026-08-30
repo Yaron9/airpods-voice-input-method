@@ -1,0 +1,24 @@
+#!/bin/zsh
+set -euo pipefail
+
+legacy_app="/Applications/AirPods Siri Voice Bridge.app"
+legacy_pattern='^/Applications/AirPods Siri Voice Bridge[.]app/Contents/MacOS/airpods-siri-voice-bridge( |$)'
+legacy_pid=$(pgrep -f "$legacy_pattern" | head -n 1 || true)
+if [[ "$legacy_pid" == <-> ]]; then
+  mkdir -p /tmp/airpods-fn-test
+  print -n > /tmp/airpods-fn-test/stop.request
+  for _ in {1..50}; do
+    kill -0 "$legacy_pid" 2>/dev/null || break
+    sleep 0.1
+  done
+  if kill -0 "$legacy_pid" 2>/dev/null; then
+    print -u2 -- "AirPods Voice 输入法 1.0 安装失败：请先退出旧测试版，再重新安装。"
+    exit 1
+  fi
+fi
+
+console_uid=$(stat -f %u /dev/console)
+if [[ "$console_uid" == <-> ]] && (( console_uid > 0 )); then
+  launchctl bootout "gui/$console_uid/com.metame.airpods-siri-voice-bridge" 2>/dev/null || true
+fi
+[[ ! -e "$legacy_app" ]] || /bin/rm -R -- "$legacy_app"

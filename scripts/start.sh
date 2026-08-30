@@ -27,6 +27,23 @@ esac
 lsregister=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 mkdir -p "$runtime_dir"
 
+legacy_label=com.metame.airpods-siri-voice-bridge
+legacy_pattern='^/Applications/AirPods Siri Voice Bridge[.]app/Contents/MacOS/airpods-siri-voice-bridge( |$)'
+legacy_pid=$(pgrep -f "$legacy_pattern" | head -n 1 || true)
+if [[ "$legacy_pid" == <-> ]]; then
+  mkdir -p /tmp/airpods-fn-test
+  print -n > /tmp/airpods-fn-test/stop.request
+  for _ in {1..50}; do
+    kill -0 "$legacy_pid" 2>/dev/null || break
+    sleep 0.1
+  done
+  if kill -0 "$legacy_pid" 2>/dev/null; then
+    echo "Pre-1.0 app did not stop; quit it before starting AirPods Voice 输入法 1.0" >&2
+    exit 1
+  fi
+fi
+launchctl remove "$legacy_label" 2>/dev/null || true
+
 launchd_pid=$(launchctl print "gui/$(id -u)/$launch_label" 2>/dev/null \
   | awk '/^[[:space:]]*pid = [0-9]+/ { print $3; exit }' || true)
 if [[ "$launchd_pid" == <-> ]] && kill -0 "$launchd_pid" 2>/dev/null; then

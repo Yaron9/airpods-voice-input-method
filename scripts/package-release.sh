@@ -9,6 +9,7 @@ version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
   "$project_dir/resources/Info.plist")
 package="$dist_dir/AirPods-Voice-Input-Method-$version-macOS.pkg"
 component_plist="$project_dir/resources/package-components.plist"
+package_scripts="$project_dir/resources/package-scripts"
 app_sign_identity=${AIRPODS_VOICE_INPUT_SIGN_IDENTITY:--}
 installer_sign_identity=${AIRPODS_VOICE_INPUT_INSTALLER_SIGN_IDENTITY:-}
 
@@ -34,6 +35,7 @@ fi
 pkgbuild_args=(
   --root "$staging_root" \
   --component-plist "$component_plist" \
+  --scripts "$package_scripts" \
   --install-location /Applications \
   --identifier com.yaron.airpods-voice-input-method.installer \
   --version "$version"
