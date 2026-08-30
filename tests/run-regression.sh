@@ -140,6 +140,13 @@ if [[ ! -e "$siri_stop_marker" ]]; then
 fi
 wait "$siri_stop_receiver_pid"
 
+"$bridge" --long-press-stop-test >"$result_dir/long-press-stop.log" 2>&1
+rg -q 'Voice key fn up; voice input stopped' "$result_dir/long-press-stop.log"
+if rg -q 'Return key posted' "$result_dir/long-press-stop.log"; then
+  echo "LONG-PRESS SAFETY FAILED: a second long press submitted text" >&2
+  exit 1
+fi
+
 "$bridge" --voice-key option --self-test >"$result_dir/configurable-key.log" 2>&1
 rg -q 'voiceKey=option' "$result_dir/configurable-key.log"
 rg -q 'Voice key option down' "$result_dir/configurable-key.log"
@@ -233,6 +240,7 @@ rg -q 'Closing lower-priority app copy' "$result_dir/preferred-copy.log"
 echo "REGRESSION PASSED: AirPods long press -> Siri release -> HID Fn hold -> AirPods single press stop"
 echo "RETURN DELIVERY PASSED: frontmost application received commit + send Return sequence"
 echo "SIRI STOP SUBMIT PASSED: Siri-routed AirPods stop also submitted voice input"
+echo "LONG-PRESS SAFETY PASSED: a second long press stopped without submitting"
 echo "CONFIGURABLE KEY PASSED: non-Fn option key performed down/up lifecycle"
 echo "LIFECYCLE PASSED: stop request during Fn-down performs graceful Fn-up cleanup"
 echo "LAUNCH RACE PASSED: a stop request present during launch is honored"

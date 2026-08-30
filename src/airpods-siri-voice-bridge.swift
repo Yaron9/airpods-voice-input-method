@@ -351,9 +351,14 @@ private final class AirPodsVoiceController {
                 return
             }
             lastInvocation = now
-            writeLog("AirPods Siri stop event received while recording; stopping and submitting voice input")
             terminateSiriAudioSession()
-            endVoiceKeyHold(reason: "AirPods single press via Siri", submit: true)
+            if line.contains(airPodsCloseMarker) {
+                writeLog("AirPods Siri Close received while recording; stopping and submitting voice input")
+                endVoiceKeyHold(reason: "AirPods single press via Siri", submit: true)
+            } else {
+                writeLog("Second AirPods long press received; stopping without submitting")
+                endVoiceKeyHold(reason: "second AirPods long press")
+            }
             return
         }
         guard !busy, timeSinceLastInvocation >= duplicateWindow else {
@@ -660,7 +665,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         let returnTest = CommandLine.arguments.contains("--return-test")
         let cycleTest = CommandLine.arguments.contains("--cycle-test")
         let siriStopTest = CommandLine.arguments.contains("--siri-stop-test")
-        let replayTest = selfTest || returnTest || cycleTest || siriStopTest
+        let longPressStopTest = CommandLine.arguments.contains("--long-press-stop-test")
+        let replayTest = selfTest || returnTest || cycleTest || siriStopTest || longPressStopTest
         if !replayTest, !enforcePreferredInstance() { return }
 
         let stopRequestTimer = Timer(timeInterval: 0.1, repeats: true) { _ in
@@ -746,16 +752,15 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + finalStop + 1.5) {
                 NSApp.terminate(nil)
             }
-        } else if siriStopTest {
+        } else if siriStopTest || longPressStopTest {
             let start = 0.2
             let stop = start + siriReleaseDelay + focusReactivationDelay + duplicateWindow + 0.2
             DispatchQueue.main.asyncAfter(deadline: .now() + start) {
                 controller.handleLogLine("START SiriNCActionHearstDoubleTap - BluetoothHFP")
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + stop) {
-                // Captured on hardware when an AirPods single press was routed
-                // through Siri instead of MPRemoteCommandCenter.
-                controller.handleLogLine("STOP SiriNCActionClose - BluetoothHFP")
+                let marker = siriStopTest ? airPodsCloseMarker : airPodsHearstMarker
+                controller.handleLogLine("STOP \(marker)")
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + stop + 1.5) {
                 NSApp.terminate(nil)
