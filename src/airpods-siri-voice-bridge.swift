@@ -346,6 +346,11 @@ private final class AirPodsVoiceController {
         startTimer?.invalidate()
         releaseTimer?.invalidate()
         submitTimer?.invalidate()
+        startTimer = nil
+        releaseTimer = nil
+        submitTimer = nil
+        busy = false
+        targetApplication = nil
         if voiceKeyIsDown {
             _ = postVoiceKey(down: false)
             voiceKeyIsDown = false
@@ -775,8 +780,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         let siriStopTest = CommandLine.arguments.contains("--siri-stop-test")
         let longPressStopTest = CommandLine.arguments.contains("--long-press-stop-test")
         let siriResetFailureTest = CommandLine.arguments.contains("--siri-reset-failure-test")
+        let stopStartDuringSubmitTest = CommandLine.arguments.contains(
+            "--stop-start-during-submit-test")
         let replayTest = selfTest || returnTest || cycleTest || siriStopTest || longPressStopTest
-            || siriResetFailureTest
+            || siriResetFailureTest || stopStartDuringSubmitTest
         if !replayTest, !enforcePreferredInstance() { return }
 
         let stopRequestTimer = Timer(timeInterval: 0.1, repeats: true) { _ in
@@ -795,9 +802,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         self.voiceKey = voiceKey
+        let testReset: () -> Bool = stopStartDuringSubmitTest ? { true } : resetSiriSession
         let controller = AirPodsVoiceController(
             voiceKey: voiceKey,
-            siriSessionReset: siriResetFailureTest ? { false } : resetSiriSession)
+            siriSessionReset: siriResetFailureTest ? { false } : testReset)
         self.controller = controller
         if !replayTest {
             configureStatusMenu()
@@ -812,7 +820,27 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         updateStatusMenu()
-        if siriResetFailureTest {
+        if stopStartDuringSubmitTest {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                controller.handleLogLine("STOP-START-1 \(airPodsHearstMarker)")
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                controller.handleAirPodsSinglePress()
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+                controller.stop()
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                _ = controller.start(watchLogs: false)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.3) {
+                controller.handleLogLine("STOP-START-2 \(airPodsHearstMarker)")
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
+                controller.stop()
+                NSApp.terminate(nil)
+            }
+        } else if siriResetFailureTest {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                 controller.handleLogLine("RESET-FAILURE \(airPodsHearstMarker)")
             }

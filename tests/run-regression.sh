@@ -64,6 +64,11 @@ if rg -q 'Voice key .* down' "$result_dir/siri-reset-failure.log"; then
   echo "SIRI RESET FAILURE TEST FAILED: voice input started without a ready Siri host" >&2
   exit 1
 fi
+"$bridge" --stop-start-during-submit-test >"$result_dir/stop-start-during-submit.log" 2>&1
+if [[ $(rg -c 'Voice key fn down' "$result_dir/stop-start-during-submit.log") != 2 ]]; then
+  echo "STOP-START DURING SUBMIT TEST FAILED: stale busy state blocked the second start" >&2
+  exit 1
+fi
 
 "$project_dir/tests/run-multicycle-e2e.sh"
 multicycle_log=/tmp/airpods-fn-test/multicycle-e2e/bridge.log
