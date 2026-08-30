@@ -24,6 +24,20 @@
 
 设置会随 AirPods 同步。完成后，长按左耳会唤醒 Siri，桥接 App 才能识别这次操作。
 
+### 3. 授予辅助功能权限
+
+App 必须获得 macOS“辅助功能”权限，才能模拟长按语音键和发送回车：
+
+1. 先运行一次 `./scripts/start.sh`。App 会安装到 `~/Applications/AirPods Siri Voice Bridge.app`；首次启动时 macOS 可能自动弹出授权提示。
+2. 打开“系统设置 → 隐私与安全性 → 辅助功能”。
+3. 找到 **AirPods Siri Voice Bridge** 并打开右侧开关。
+4. 如果列表中没有它，点击 `+`，按 `Command + Shift + G`，输入 `~/Applications`，选择 **AirPods Siri Voice Bridge.app**。
+5. 回到菜单栏，点击波形图标并选择“启动”；必要时退出 App 后重新运行 `./scripts/start.sh`。
+
+必须授权的对象是 **AirPods Siri Voice Bridge.app**，不需要给 BetterTouchTool、终端或开发工具授权。桥接 App 本身不采集麦克风，麦克风权限由你使用的语音输入法自行管理，也不需要“完全磁盘访问”。当前实机验证只需“辅助功能”；如果其他 macOS 版本因备用的耳机按键监听额外弹出“输入监控”提示，仅在单击无法停止时按系统提示授权即可。
+
+如果系统已经打开开关但 App 仍提示无权限，请删除辅助功能列表中的旧条目，再从 `~/Applications` 重新添加上述 App。不要授权 `build/` 目录中的临时构建版本。
+
 ## 已解决的根因
 
 旧实现监听 Siri 的 `#HotKey type: 10/11/12` 日志。它们实际是所有键盘事件的通用 `keyDown/keyUp/flagsChanged`，不是 AirPods 的按下和松开；桥接器自己注入的 Fn 还会再次进入同一日志通道。
@@ -74,7 +88,7 @@ AIRPODS_BRIDGE_VOICE_KEY=option ./scripts/start.sh
 
 ## 使用
 
-前提：已完成上面的两项设置，并已给签名后的桥接 App“辅助功能”权限。构建需要 Xcode 中可用的 Apple Development 证书；也可通过 `AIRPODS_BRIDGE_SIGN_IDENTITY` 指定证书。
+前提：已完成上面的三项设置。构建需要 Xcode 中可用的 Apple Development 证书；也可通过 `AIRPODS_BRIDGE_SIGN_IDENTITY` 指定证书。
 
 ```bash
 ./scripts/start.sh
