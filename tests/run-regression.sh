@@ -22,6 +22,7 @@ mkdir -p "$result_dir" "$runtime_dir"
 
 "$app" --parser-test
 "$app" --permission-recovery-test
+"$app" --status-icon-test
 "$project_dir/tests/run-e2e.sh"
 
 "$app" --self-test >"$result_dir/self-test.log" 2>&1
@@ -111,4 +112,4 @@ print -n > "$runtime_dir/stop.request"
 wait "$preferred_pid"
 rg -q 'Closing lower-priority app copy' "$result_dir/preferred-copy.log"
 
-echo "REGRESSION PASSED: four voice rounds, Fn lifecycle, send, permissions, launch safety, and singleton behavior"
+echo "REGRESSION PASSED: four voice rounds, AirPods status icon, Fn lifecycle, send, permissions, launch safety, and singleton behavior"

@@ -636,6 +636,31 @@ private func runPermissionRecoveryTests() -> Bool {
 }
 
 @MainActor
+private func makeStatusIcon(running: Bool) -> NSImage? {
+    let description = running ? "AirPods Voice 输入法运行中" : "AirPods Voice 输入法已停止"
+    guard let symbol = NSImage(systemSymbolName: "airpods", accessibilityDescription: description)
+    else { return nil }
+    let configuration = NSImage.SymbolConfiguration(pointSize: 15, weight: .medium)
+    let image = symbol.withSymbolConfiguration(configuration) ?? symbol
+    image.isTemplate = true
+    return image
+}
+
+@MainActor
+private func runStatusIconTest() -> Bool {
+    guard let running = makeStatusIcon(running: true),
+          let stopped = makeStatusIcon(running: false),
+          running.isTemplate, stopped.isTemplate,
+          running.size.width > 0, running.size.height > 0,
+          stopped.size.width > 0, stopped.size.height > 0 else {
+        fputs("STATUS ICON TEST FAILED: AirPods template symbol is unavailable\n", stderr)
+        return false
+    }
+    print("STATUS ICON TEST PASSED: AirPods template symbol is available for both states")
+    return true
+}
+
+@MainActor
 private final class AppDelegate: NSObject, NSApplicationDelegate {
     private var controller: AirPodsVoiceController?
     private var stopRequestTimer: Timer?
@@ -850,10 +875,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         let running = controller?.isRunning == true
         statusLineItem?.title = running ? "状态：运行中" : "状态：已停止"
         toggleItem?.title = running ? "停止" : "启动"
-        let symbolName = running ? "waveform.circle.fill" : "waveform.circle"
-        let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: running ? "运行中" : "已停止")
-        image?.isTemplate = true
-        statusItem?.button?.image = image
+        statusItem?.button?.toolTip = running
+            ? "AirPods Voice 输入法：运行中"
+            : "AirPods Voice 输入法：已停止"
+        statusItem?.button?.image = makeStatusIcon(running: running)
     }
 
     @objc private func toggleVoiceInput() {
@@ -997,6 +1022,11 @@ if CommandLine.arguments.contains("--parser-test") {
 
 if CommandLine.arguments.contains("--permission-recovery-test") {
     exit(runPermissionRecoveryTests() ? 0 : 1)
+}
+
+if CommandLine.arguments.contains("--status-icon-test") {
+    let passed = MainActor.assumeIsolated { runStatusIconTest() }
+    exit(passed ? 0 : 1)
 }
 
 MainActor.assumeIsolated {
