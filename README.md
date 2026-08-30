@@ -48,7 +48,7 @@ App 必须获得 macOS“辅助功能”权限，才能模拟长按语音键和�
 
 ## 实现原理
 
-App 在运行期间通过 `MPRemoteCommandCenter` 持有 Now Playing 会话，从媒体系统接收 AirPods 单击；同时使用 IOHID 作为备用监听，并用 350ms 去重窗口合并同一次实体操作。第一次单击通过 `IOHIDPostEvent` 按下真正的 Fn modifier，第二次单击释放 Fn，并依次发送两次回车完成输入法确认与消息发送。整个流程不启动、关闭或监听 Siri。
+App 在运行期间通过 `MPRemoteCommandCenter` 持有 Now Playing 会话，从媒体系统接收 AirPods 单击；只有来源为 macOS 蓝牙服务 `com.apple.bluetoothd` 的媒体事件才会触发语音，Mac 键盘播放键等 `com.apple.rcd` 事件会被忽略。同时使用 IOHID 作为备用监听，并用 350ms 去重窗口合并同一次实体操作。第一次单击通过 `IOHIDPostEvent` 按下真正的 Fn modifier，第二次单击释放 Fn，并依次发送两次回车完成输入法确认与消息发送。整个流程不启动、关闭或监听 Siri。
 
 ## 高级：配置其他语音按键
 

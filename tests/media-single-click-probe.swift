@@ -5,6 +5,7 @@ import MediaPlayer
 @MainActor
 final class MediaSingleClickProbe {
     private var targets: [(MPRemoteCommand, Any)] = []
+    private var received = 0
 
     func run() {
         let center = MPRemoteCommandCenter.shared()
@@ -15,11 +16,24 @@ final class MediaSingleClickProbe {
         ]
         for (name, command) in commands {
             command.isEnabled = true
-            let target = command.addTarget { _ in
-                print("MEDIA_SINGLE_CLICK_RECEIVED command=\(name)")
+            let target = command.addTarget { [weak self] event in
+                guard let self else { return .commandFailed }
+                self.received += 1
+                let object = event as NSObject
+                func inspectedValue(_ key: String) -> Any {
+                    let selector = NSSelectorFromString(key)
+                    return object.responds(to: selector) ? object.value(forKey: key) : "nil"
+                }
+                let sourceID = inspectedValue("sourceID")
+                let interfaceID = inspectedValue("interfaceID")
+                let contextID = inspectedValue("contextID")
+                let options = inspectedValue("mediaRemoteOptions")
+                print("MEDIA_SINGLE_CLICK_RECEIVED command=\(name) class=\(type(of: event)) sourceID=\(sourceID) interfaceID=\(interfaceID) contextID=\(contextID) options=\(options) timestamp=\(event.timestamp)")
                 fflush(stdout)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    NSApp.terminate(nil)
+                if self.received >= 2 {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        NSApp.terminate(nil)
+                    }
                 }
                 return .success
             }

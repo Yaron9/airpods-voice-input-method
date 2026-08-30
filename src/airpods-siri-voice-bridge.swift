@@ -32,6 +32,7 @@ private let singlePressDuplicateWindow: TimeInterval = 0.35
 private let maximumFnHoldDuration: TimeInterval = 60.0
 private let consumerUsagePage: UInt32 = 0x0c
 private let playPauseUsage: UInt32 = 0xcd
+private let bluetoothMediaRemoteSender = "SenderBundleIdentifier = <com.apple.bluetoothd>"
 private let returnKeyCode: UInt16 = 36
 private let escapeKeyCode: UInt16 = 53
 private let logDateFormatter: ISO8601DateFormatter = {
@@ -193,6 +194,17 @@ private func airPodsEventAlreadyResetsSiriSession(_ line: String) -> Bool {
 
 private func isPlayPausePress(usagePage: UInt32, usage: UInt32, value: Int) -> Bool {
     usagePage == consumerUsagePage && usage == playPauseUsage && value != 0
+}
+
+private func isBluetoothMediaRemoteSource(_ sourceID: String?) -> Bool {
+    sourceID?.contains(bluetoothMediaRemoteSender) == true
+}
+
+private func mediaRemoteSourceID(_ event: MPRemoteCommandEvent) -> String? {
+    let object = event as NSObject
+    let selector = NSSelectorFromString("sourceID")
+    guard object.responds(to: selector) else { return nil }
+    return object.value(forKey: "sourceID") as? String
 }
 
 @discardableResult
@@ -488,9 +500,14 @@ private final class AirPodsVoiceController {
         ]
         for (name, command) in commands {
             command.isEnabled = true
-            let target = command.addTarget { [weak self] _ in
+            let target = command.addTarget { [weak self] event in
+                let sourceID = mediaRemoteSourceID(event)
+                guard isBluetoothMediaRemoteSource(sourceID) else {
+                    writeLog("Ignored non-Bluetooth media remote command; command=\(name); source=\(sourceID ?? "unknown")")
+                    return .commandFailed
+                }
                 Task { @MainActor in
-                    writeLog("Media remote command received; command=\(name)")
+                    writeLog("Bluetooth media remote command received; command=\(name)")
                     self?.handleAirPodsSinglePress()
                 }
                 return .success
@@ -673,6 +690,14 @@ private func runParserTests() -> Bool {
           !isPlayPausePress(usagePage: 0x0c, usage: 0xe9, value: 1),
           !isPlayPausePress(usagePage: 0x01, usage: 0xcd, value: 1) else {
         fputs("CONSUMER CONTROL TEST FAILED: play/pause matching is incorrect\n", stderr)
+        return false
+    }
+    let bluetoothSource = "SenderDevice = <Mac>, SenderBundleIdentifier = <com.apple.bluetoothd>, SenderPID = <442>"
+    let keyboardSource = "SenderDevice = <Mac>, SenderBundleIdentifier = <com.apple.rcd>, SenderPID = <18882>"
+    guard isBluetoothMediaRemoteSource(bluetoothSource),
+          !isBluetoothMediaRemoteSource(keyboardSource),
+          !isBluetoothMediaRemoteSource(nil) else {
+        fputs("MEDIA REMOTE SOURCE TEST FAILED: only bluetoothd may trigger voice input\n", stderr)
         return false
     }
     guard VoiceActivationKey.supportedNames.allSatisfy({ VoiceActivationKey.parse($0) != nil }),
