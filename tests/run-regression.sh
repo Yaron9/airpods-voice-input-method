@@ -66,7 +66,7 @@ if rg -q 'Voice key .* down' "$result_dir/siri-reset-failure.log"; then
 fi
 "$bridge" --stop-start-during-submit-test >"$result_dir/stop-start-during-submit.log" 2>&1
 if [[ $(rg -c 'Voice key fn down' "$result_dir/stop-start-during-submit.log") != 2 ]]; then
-  echo "STOP-START DURING SUBMIT TEST FAILED: stale busy state blocked the second start" >&2
+  echo "STOP-START DURING SUBMIT TEST FAILED: stale per-session state blocked the second start" >&2
   exit 1
 fi
 

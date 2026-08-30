@@ -350,6 +350,7 @@ private final class AirPodsVoiceController {
         releaseTimer = nil
         submitTimer = nil
         busy = false
+        lastInvocation = .distantPast
         targetApplication = nil
         if voiceKeyIsDown {
             _ = postVoiceKey(down: false)
@@ -833,10 +834,12 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
                 _ = controller.start(watchLogs: false)
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.3) {
+            // Restart and replay inside duplicateWindow so stale per-session
+            // suppression state cannot hide behind the test timing.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
                 controller.handleLogLine("STOP-START-2 \(airPodsHearstMarker)")
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
                 controller.stop()
                 NSApp.terminate(nil)
             }
