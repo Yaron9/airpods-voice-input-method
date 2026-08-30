@@ -124,9 +124,34 @@ if [[ "$start_result" != "Bridge already running (PID $foreign_pid)" ]]; then
 fi
 "$project_dir/scripts/stop.sh" >/dev/null
 
+# Start a downloaded/temporary copy, then start the installed copy directly.
+# The installed copy must take over and close the lower-priority copy.
+"$foreign_bridge" >"$result_dir/lower-priority-copy.log" 2>&1 &
+lower_priority_pid=$!
+sleep 0.3
+installed_bridge="$HOME/Applications/AirPods Siri Voice Bridge.app/Contents/MacOS/airpods-siri-voice-bridge"
+"$installed_bridge" --voice-key fn >"$result_dir/preferred-copy.log" 2>&1 &
+preferred_pid=$!
+for _ in {1..30}; do
+  kill -0 "$lower_priority_pid" 2>/dev/null || break
+  sleep 0.1
+done
+if kill -0 "$lower_priority_pid" 2>/dev/null; then
+  print -n > /tmp/airpods-fn-test/stop.request
+  wait "$lower_priority_pid" 2>/dev/null || true
+  wait "$preferred_pid" 2>/dev/null || true
+  echo "APP SINGLETON FAILED: installed app did not close the temporary copy" >&2
+  exit 1
+fi
+wait "$lower_priority_pid"
+print -n > /tmp/airpods-fn-test/stop.request
+wait "$preferred_pid"
+rg -q 'Closing lower-priority app copy' "$result_dir/preferred-copy.log"
+
 echo "REGRESSION PASSED: AirPods long press -> Siri release -> HID Fn hold -> AirPods single press stop"
 echo "RETURN DELIVERY PASSED: frontmost application received commit + send Return sequence"
 echo "CONFIGURABLE KEY PASSED: non-Fn option key performed down/up lifecycle"
 echo "LIFECYCLE PASSED: stop request during Fn-down performs graceful Fn-up cleanup"
 echo "LAUNCH RACE PASSED: a stop request present during launch is honored"
 echo "SINGLETON PASSED: a bridge from another checkout is reused, not duplicated"
+echo "APP SINGLETON PASSED: installed app closes downloaded or temporary copies"

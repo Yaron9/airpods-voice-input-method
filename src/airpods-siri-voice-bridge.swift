@@ -83,6 +83,24 @@ private func configuredVoiceKey(arguments: [String] = CommandLine.arguments) -> 
     return VoiceActivationKey.parse(arguments[valueIndex])
 }
 
+private func installationPriority(path: String, homeDirectory: String = NSHomeDirectory()) -> Int {
+    let normalizedPath = URL(fileURLWithPath: path).standardizedFileURL.path
+    if normalizedPath.hasPrefix("/Applications/") { return 2 }
+    let userApplications = URL(fileURLWithPath: homeDirectory)
+        .appendingPathComponent("Applications").standardizedFileURL.path + "/"
+    if normalizedPath.hasPrefix(userApplications) { return 1 }
+    return 0
+}
+
+private func shouldYieldToOtherInstance(
+    ownPath: String, ownPID: pid_t, otherPath: String, otherPID: pid_t,
+    homeDirectory: String = NSHomeDirectory()
+) -> Bool {
+    let ownPriority = installationPriority(path: ownPath, homeDirectory: homeDirectory)
+    let otherPriority = installationPriority(path: otherPath, homeDirectory: homeDirectory)
+    return otherPriority > ownPriority || (otherPriority == ownPriority && otherPID < ownPID)
+}
+
 private func mergedModifierFlags(
     current: CGEventFlags, modifier: CGEventFlags, down: Bool
 ) -> CGEventFlags {
@@ -508,11 +526,26 @@ private func runParserTests() -> Bool {
         fputs("MODIFIER TEST FAILED: existing modifier flags were not preserved\n", stderr)
         return false
     }
+    guard installationPriority(path: "/Applications/Bridge.app", homeDirectory: "/Users/test") == 2,
+          installationPriority(path: "/Users/test/Applications/Bridge.app", homeDirectory: "/Users/test") == 1,
+          installationPriority(path: "/Users/test/Downloads/Bridge.app", homeDirectory: "/Users/test") == 0,
+          shouldYieldToOtherInstance(
+            ownPath: "/Users/test/Downloads/Bridge.app", ownPID: 200,
+            otherPath: "/Users/test/Applications/Bridge.app", otherPID: 300,
+            homeDirectory: "/Users/test"),
+          !shouldYieldToOtherInstance(
+            ownPath: "/Users/test/Applications/Bridge.app", ownPID: 300,
+            otherPath: "/Users/test/Downloads/Bridge.app", otherPID: 200,
+            homeDirectory: "/Users/test") else {
+        fputs("INSTANCE PRIORITY TEST FAILED\n", stderr)
+        return false
+    }
     print("PARSER TEST PASSED: only BluetoothHFP AirPods Siri invocation is accepted")
     print("CONSUMER CONTROL TEST PASSED: only Play/Pause key-down is accepted")
     print("VOICE KEY CONFIG TEST PASSED: supported names parse and default to fn")
     print("CONFIGURABLE MODIFIER TEST PASSED: existing flags survive key down and up")
     print("MODIFIER TEST PASSED: Shift/Command survive Fn down and up")
+    print("INSTANCE PRIORITY TEST PASSED: installed app wins over downloaded copies")
     return true
 }
 
@@ -525,8 +558,14 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private var toggleItem: NSMenuItem?
     private var voiceKey: VoiceActivationKey?
     private var instructionsPopover: NSPopover?
+    private var permissionRetryTimer: Timer?
+    private var startFailureAlert: NSAlert?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let selfTest = CommandLine.arguments.contains("--self-test")
+        let returnTest = CommandLine.arguments.contains("--return-test")
+        if !(selfTest || returnTest), !enforcePreferredInstance() { return }
+
         let stopRequestTimer = Timer(timeInterval: 0.1, repeats: true) { _ in
             guard FileManager.default.fileExists(atPath: stopRequestURL.path) else { return }
             try? FileManager.default.removeItem(at: stopRequestURL)
@@ -536,8 +575,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         self.stopRequestTimer = stopRequestTimer
         RunLoop.main.add(stopRequestTimer, forMode: .common)
 
-        let selfTest = CommandLine.arguments.contains("--self-test")
-        let returnTest = CommandLine.arguments.contains("--return-test")
         guard let voiceKey = configuredVoiceKey() else {
             let supported = VoiceActivationKey.supportedNames.joined(separator: ", ")
             writeLog("Invalid --voice-key value; supported=\(supported)")
@@ -582,7 +619,38 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         stopRequestTimer?.invalidate()
+        permissionRetryTimer?.invalidate()
         controller?.stop()
+    }
+
+    private func enforcePreferredInstance() -> Bool {
+        guard let bundleIdentifier = Bundle.main.bundleIdentifier else { return true }
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        let ownPath = Bundle.main.bundleURL.path
+        let others = NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier)
+            .filter { $0.processIdentifier != ownPID && !$0.isTerminated }
+
+        if let preferred = others.first(where: { other in
+            guard let otherPath = other.bundleURL?.path else { return false }
+            return shouldYieldToOtherInstance(
+                ownPath: ownPath, ownPID: ownPID,
+                otherPath: otherPath, otherPID: other.processIdentifier)
+        }) {
+            writeLog("Another preferred app copy is already running; path=\(preferred.bundleURL?.path ?? "unknown")")
+            _ = preferred.activate(options: [.activateIgnoringOtherApps])
+            NSApp.terminate(nil)
+            return false
+        }
+
+        for other in others {
+            guard let otherPath = other.bundleURL?.path,
+                  shouldYieldToOtherInstance(
+                    ownPath: otherPath, ownPID: other.processIdentifier,
+                    otherPath: ownPath, otherPID: ownPID) else { continue }
+            writeLog("Closing lower-priority app copy; path=\(otherPath)")
+            _ = other.terminate()
+        }
+        return true
     }
 
     private func configureStatusMenu() {
@@ -664,20 +732,21 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        let title = NSTextField(labelWithString: "使用前请完成两项设置")
+        let title = NSTextField(labelWithString: "使用前请完成三项设置")
         title.font = .systemFont(ofSize: 15, weight: .semibold)
 
         let firstStep = NSTextField(labelWithString: "1. 在语音输入法设置中，将语音输入快捷键设为“长按 Fn”。")
         let secondStep = NSTextField(labelWithString: "2. 在 AirPods 设置中，将左耳“按住”设为唤醒 Siri。")
+        let thirdStep = NSTextField(labelWithString: "3. 在隐私与安全性中，允许本 App 使用“辅助功能”。")
         let usage = NSTextField(labelWithString: "完成后，长按左耳开始说话，单击停止并发送。")
-        for label in [firstStep, secondStep, usage] {
+        for label in [firstStep, secondStep, thirdStep, usage] {
             label.maximumNumberOfLines = 0
             label.lineBreakMode = .byWordWrapping
             label.preferredMaxLayoutWidth = 320
         }
         usage.textColor = .secondaryLabelColor
 
-        let stack = NSStackView(views: [title, firstStep, secondStep, usage])
+        let stack = NSStackView(views: [title, firstStep, secondStep, thirdStep, usage])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 12
@@ -699,19 +768,51 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         let popover = NSPopover()
         popover.behavior = .transient
         popover.contentViewController = viewController
-        popover.contentSize = NSSize(width: 356, height: 190)
+        popover.contentSize = NSSize(width: 356, height: 230)
         instructionsPopover = popover
         popover.show(relativeTo: statusButton.bounds, of: statusButton, preferredEdge: .minY)
     }
 
     private func showStartFailure() {
+        if !CGPreflightPostEventAccess() { beginPermissionRetrying() }
+        guard startFailureAlert == nil else { return }
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = "无法启动语音桥接"
-        alert.informativeText = "请在“系统设置 → 隐私与安全性 → 辅助功能”中允许 AirPods Voice Bridge，然后再次点击“启动”。"
+        alert.informativeText = "请在“系统设置 → 隐私与安全性 → 辅助功能”中允许 AirPods Voice Bridge。授权生效后 App 会自动启动。"
         alert.alertStyle = .warning
         alert.addButton(withTitle: "知道了")
+        startFailureAlert = alert
         alert.runModal()
+        if startFailureAlert === alert { startFailureAlert = nil }
+    }
+
+    private func beginPermissionRetrying() {
+        guard permissionRetryTimer == nil else { return }
+        let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.retryStartAfterPermissionGrant() }
+        }
+        permissionRetryTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func retryStartAfterPermissionGrant() {
+        guard CGPreflightPostEventAccess() else { return }
+        permissionRetryTimer?.invalidate()
+        permissionRetryTimer = nil
+
+        if let alert = startFailureAlert {
+            NSApp.abortModal()
+            alert.window.orderOut(nil)
+            startFailureAlert = nil
+        }
+        guard let controller, !controller.isRunning else { return }
+        if controller.start() {
+            writeLog("Accessibility permission became available; bridge started automatically")
+        } else {
+            showStartFailure()
+        }
+        updateStatusMenu()
     }
 
     @objc private func quitApplication() {
