@@ -7,8 +7,9 @@ result_dir=/tmp/airpods-fn-test/regression
 installed_app=${AIRPODS_BRIDGE_TEST_INSTALLED_APP:-"$HOME/Applications/AirPods Siri Voice Bridge Regression.app"}
 production_app="/Applications/AirPods Siri Voice Bridge.app"
 production_executable="$production_app/Contents/MacOS/airpods-siri-voice-bridge"
-production_pattern='^/Applications/AirPods Siri Voice Bridge[.]app/Contents/MacOS/airpods-siri-voice-bridge$'
+production_pattern='^/Applications/AirPods Siri Voice Bridge[.]app/Contents/MacOS/airpods-siri-voice-bridge( |$)'
 production_was_running=false
+production_was_launchd_managed=false
 if [[ "${installed_app:t}" != "AirPods Siri Voice Bridge Regression.app" ]]; then
   echo "Refusing non-regression app path: $installed_app" >&2
   exit 1
@@ -16,7 +17,11 @@ fi
 cleanup_regression_app() {
   [[ ! -e "$installed_app" ]] || rm -rf -- "$installed_app"
   if $production_was_running && [[ -x "$production_executable" ]]; then
-    open "$production_app"
+    if $production_was_launchd_managed; then
+      "$project_dir/scripts/start.sh" >/dev/null
+    else
+      open "$production_app"
+    fi
   fi
 }
 trap cleanup_regression_app EXIT
@@ -26,11 +31,19 @@ launchctl remove com.metame.airpods-siri-voice-bridge 2>/dev/null || true
 
 if pgrep -f "$production_pattern" >/dev/null; then
   production_was_running=true
-  print -n > /tmp/airpods-fn-test/stop.request
-  for _ in {1..30}; do
-    pgrep -f "$production_pattern" >/dev/null || break
-    sleep 0.1
-  done
+  production_pid=$(pgrep -f "$production_pattern" | head -n 1)
+  production_launchd_pid=$(launchctl print "gui/$(id -u)/com.metame.airpods-siri-voice-bridge" 2>/dev/null \
+    | awk '/^[[:space:]]*pid = [0-9]+/ { print $3; exit }' || true)
+  if [[ "$production_launchd_pid" == "$production_pid" ]]; then
+    production_was_launchd_managed=true
+    "$project_dir/scripts/stop.sh" >/dev/null
+  else
+    print -n > /tmp/airpods-fn-test/stop.request
+    for _ in {1..30}; do
+      pgrep -f "$production_pattern" >/dev/null || break
+      sleep 0.1
+    done
+  fi
   if pgrep -f "$production_pattern" >/dev/null; then
     echo "TEST SETUP FAILED: installed production app did not stop gracefully" >&2
     exit 1
