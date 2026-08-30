@@ -45,6 +45,7 @@ if [[ -n "$installer_sign_identity" ]]; then
 fi
 pkgbuild "${pkgbuild_args[@]}" "$package" >/dev/null
 pkgutil --payload-files "$package" | grep -Fq './AirPods Voice 输入法.app/Contents/MacOS/airpods-voice-input-method'
+pkgutil --payload-files "$package" | grep -Fq './AirPods Voice 输入法.app/Contents/Resources/AppIcon.icns'
 
 echo "$package"
 shasum -a 256 "$package"

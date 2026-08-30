@@ -6,10 +6,24 @@ build_dir="$project_dir/build"
 app_dir="$build_dir/AirPods Voice 输入法.app"
 contents_dir="$app_dir/Contents"
 macos_dir="$contents_dir/MacOS"
+resources_dir="$contents_dir/Resources"
 executable="$macos_dir/airpods-voice-input-method"
+icon_source="$project_dir/resources/AppIcon.png"
+iconset_dir="$build_dir/AppIcon.iconset"
+icon_file="$resources_dir/AppIcon.icns"
 deployment_target=13.0
 sign_identity=${AIRPODS_VOICE_INPUT_SIGN_IDENTITY:--}
-mkdir -p "$macos_dir"
+mkdir -p "$macos_dir" "$resources_dir" "$iconset_dir"
+
+icon_sizes=(16 32 128 256 512)
+for icon_size in $icon_sizes; do
+  retina_size=$((icon_size * 2))
+  sips -z "$icon_size" "$icon_size" "$icon_source" \
+    --out "$iconset_dir/icon_${icon_size}x${icon_size}.png" >/dev/null
+  sips -z "$retina_size" "$retina_size" "$icon_source" \
+    --out "$iconset_dir/icon_${icon_size}x${icon_size}@2x.png" >/dev/null
+done
+iconutil -c icns "$iconset_dir" -o "$icon_file"
 
 if [[ "$sign_identity" != "-" ]] \
   && ! security find-identity -v -p codesigning | grep -Fq "\"$sign_identity\""; then

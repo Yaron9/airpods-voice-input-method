@@ -72,6 +72,8 @@ App 必须获得 macOS“辅助功能”权限，才能模拟长按语音键以�
 
 MacBook 菜单栏图标过多时，图标可能被摄像头刘海遮住。按住 `Command` 拖动图标，可将它移动到刘海右侧；位置会由 macOS 保存。
 
+Finder、“应用程序”和启动器中显示蓝青色 AirPods 语音波形 App 图标，不再使用 macOS 默认应用图标。
+
 ## 配置其他语音快捷键
 
 默认配置文件是 [`config/voice-key`](config/voice-key)，内容为：

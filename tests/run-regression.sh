@@ -20,6 +20,12 @@ mkdir -p "$result_dir" "$runtime_dir"
 
 "$project_dir/scripts/build.sh" >/dev/null
 
+app_icon="$project_dir/build/AirPods Voice 输入法.app/Contents/Resources/AppIcon.icns"
+[[ -f "$app_icon" ]] || { echo "APP ICON TEST FAILED: AppIcon.icns is missing" >&2; exit 1; }
+[[ "$(plutil -extract CFBundleIconFile raw "$project_dir/build/AirPods Voice 输入法.app/Contents/Info.plist")" == "AppIcon" ]] \
+  || { echo "APP ICON TEST FAILED: Info.plist does not reference AppIcon" >&2; exit 1; }
+echo "APP ICON TEST PASSED: desktop icon is bundled and referenced"
+
 "$app" --parser-test
 "$app" --permission-recovery-test
 "$app" --status-icon-test
