@@ -455,6 +455,10 @@ private final class AirPodsVoiceController {
         writeLog("AirPods single press received; recording=\(voiceKeyIsDown)")
         guard voiceKeyIsDown else { return }
         endVoiceKeyHold(reason: "AirPods single press", submit: true)
+        let resetSucceeded = siriSessionReset()
+        writeLog(
+            "Siri session reset after media-routed AirPods stop; "
+                + "success=\(resetSucceeded)")
     }
 
     func testReturnDelivery() {

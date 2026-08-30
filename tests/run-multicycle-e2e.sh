@@ -7,6 +7,7 @@ bridge="$project_dir/build/AirPods Siri Voice Bridge.app/Contents/MacOS/airpods-
 marker="$result_dir/return-cycles.log"
 ready="$result_dir/receiver.ready"
 expected_cycles=4
+expected_siri_resets=6
 receiver_pid=""
 
 cleanup() {
@@ -58,13 +59,13 @@ wetype_stops=$(rg -c 'AVCaptureSession_Tundra stopRunning' "$result_dir/wetype.l
 if (( completed_cycles != expected_cycles \
       || bridge_starts != expected_cycles \
       || bridge_stops != expected_cycles \
-      || siri_resets != expected_cycles \
+      || siri_resets != expected_siri_resets \
       || wetype_starts < expected_cycles \
       || wetype_stops < expected_cycles )); then
-  print -u2 -- "MULTICYCLE RED: expected=$expected_cycles sent=$completed_cycles fnDown=$bridge_starts fnUp=$bridge_stops siriReset=$siri_resets weTypeStart=$wetype_starts weTypeStop=$wetype_stops"
+  print -u2 -- "MULTICYCLE RED: expected=$expected_cycles sent=$completed_cycles fnDown=$bridge_starts fnUp=$bridge_stops siriReset=$siri_resets/$expected_siri_resets weTypeStart=$wetype_starts weTypeStop=$wetype_stops"
   exit 1
 fi
 
 wait "$receiver_pid"
 receiver_pid=""
-print -- "MULTICYCLE GREEN: $expected_cycles rounds reset Siri, started WeType, stopped, and submitted"
+print -- "MULTICYCLE GREEN: $expected_cycles rounds reset Siri after starts/media stops, started WeType, stopped, and submitted"
