@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import Darwin
 import Foundation
 import IOKit.hid
 import MediaPlayer
@@ -187,21 +188,75 @@ private func isPlayPausePress(usagePage: UInt32, usage: UInt32, value: Int) -> B
     usagePage == consumerUsagePage && usage == playPauseUsage && value != 0
 }
 
-private func terminateSiriAudioSession() {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
-    // Keep the Siri host alive: AirPods long-press events are delivered to it.
-    // Killing the host makes macOS wait tens of seconds before the next gesture works.
-    process.arguments = ["SiriNCService"]
-    process.standardOutput = FileHandle.nullDevice
-    process.standardError = FileHandle.nullDevice
+private func resetSiriSession() {
+    let oldHostPID = NSRunningApplication.runningApplications(
+        withBundleIdentifier: "com.apple.Siri").first?.processIdentifier
+    let terminator = Process()
+    terminator.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
+    // SiriNCService alone releases the microphone but leaves the AirPods DoAP
+    // stream in Stream Ready. Restart the host as well so the next long press is
+    // a fresh activation, then immediately prewarm it to avoid launchd's delay.
+    terminator.arguments = ["Siri", "SiriNCService"]
+    terminator.standardOutput = FileHandle.nullDevice
+    terminator.standardError = FileHandle.nullDevice
     do {
-        try process.run()
-        process.waitUntilExit()
-        writeLog("Siri audio session terminated; host preserved; status=\(process.terminationStatus)")
+        try terminator.run()
+        terminator.waitUntilExit()
     } catch {
-        writeLog("Could not terminate Siri audio owners: \(error.localizedDescription)")
+        writeLog("Could not reset Siri session: \(error.localizedDescription)")
+        return
     }
+
+    if let oldHostPID {
+        let deadline = Date().addingTimeInterval(0.5)
+        while kill(oldHostPID, 0) == 0, Date() < deadline {
+            usleep(10_000)
+        }
+    }
+
+    var newHost = NSRunningApplication.runningApplications(
+        withBundleIdentifier: "com.apple.Siri").first {
+            $0.processIdentifier != oldHostPID
+        }
+    let replacementDeadline = Date().addingTimeInterval(0.5)
+    while (newHost == nil || !(newHost?.isFinishedLaunching ?? false)),
+          Date() < replacementDeadline {
+        usleep(10_000)
+        newHost = NSRunningApplication.runningApplications(
+            withBundleIdentifier: "com.apple.Siri").first {
+                $0.processIdentifier != oldHostPID
+            }
+    }
+    var launchStatus: Int32 = 0
+    if newHost == nil {
+        let launcher = Process()
+        launcher.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        launcher.arguments = ["-gj", "-a", "Siri"]
+        launcher.standardOutput = FileHandle.nullDevice
+        launcher.standardError = FileHandle.nullDevice
+        do {
+            try launcher.run()
+            launcher.waitUntilExit()
+            launchStatus = launcher.terminationStatus
+            let launchDeadline = Date().addingTimeInterval(0.5)
+            repeat {
+                newHost = NSRunningApplication.runningApplications(
+                    withBundleIdentifier: "com.apple.Siri").first {
+                        $0.processIdentifier != oldHostPID && $0.isFinishedLaunching
+                    }
+                if newHost == nil { usleep(10_000) }
+            } while newHost == nil && Date() < launchDeadline
+        } catch {
+            writeLog("Could not prewarm Siri host after reset: \(error.localizedDescription)")
+            return
+        }
+    }
+    let newHostPID = newHost?.processIdentifier
+    let hostReady = newHostPID != nil && newHostPID != oldHostPID
+    writeLog(
+        "Siri host restarted and prewarmed; hostReady=\(hostReady); "
+            + "terminateStatus=\(terminator.terminationStatus); launchStatus=\(launchStatus); "
+            + "oldPID=\(oldHostPID ?? 0); newPID=\(newHostPID ?? 0)")
 }
 
 @MainActor
@@ -351,11 +406,11 @@ private final class AirPodsVoiceController {
                 return
             }
             lastInvocation = now
-            terminateSiriAudioSession()
             if line.contains(airPodsCloseMarker) {
                 writeLog("AirPods Siri Close received while recording; stopping and submitting voice input")
                 endVoiceKeyHold(reason: "AirPods single press via Siri", submit: true)
             } else {
+                resetSiriSession()
                 writeLog("Second AirPods long press received; stopping without submitting")
                 endVoiceKeyHold(reason: "second AirPods long press")
             }
@@ -372,7 +427,7 @@ private final class AirPodsVoiceController {
         let targetPID = targetApplication?.processIdentifier ?? 0
         writeLog("AirPods Siri invocation received")
         writeLog("Captured target application; bundle=\(targetID); pid=\(targetPID)")
-        terminateSiriAudioSession()
+        resetSiriSession()
         startTimer = Timer.scheduledTimer(withTimeInterval: siriReleaseDelay, repeats: false) { [weak self] _ in
             Task { @MainActor in self?.restoreFocusThenBeginFnHold() }
         }

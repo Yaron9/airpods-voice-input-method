@@ -51,18 +51,20 @@ else
 fi
 bridge_starts=$(rg -c 'Voice key fn down' "$result_dir/bridge.log" || true)
 bridge_stops=$(rg -c 'Voice key fn up; voice input stopped' "$result_dir/bridge.log" || true)
+siri_resets=$(rg -c 'Siri host restarted and prewarmed; hostReady=true' "$result_dir/bridge.log" || true)
 wetype_starts=$(rg -c 'AVCaptureSession_Tundra startRunning' "$result_dir/wetype.log" || true)
 wetype_stops=$(rg -c 'AVCaptureSession_Tundra stopRunning' "$result_dir/wetype.log" || true)
 
 if (( completed_cycles != expected_cycles \
       || bridge_starts != expected_cycles \
       || bridge_stops != expected_cycles \
+      || siri_resets != expected_cycles \
       || wetype_starts < expected_cycles \
       || wetype_stops < expected_cycles )); then
-  print -u2 -- "MULTICYCLE RED: expected=$expected_cycles sent=$completed_cycles fnDown=$bridge_starts fnUp=$bridge_stops weTypeStart=$wetype_starts weTypeStop=$wetype_stops"
+  print -u2 -- "MULTICYCLE RED: expected=$expected_cycles sent=$completed_cycles fnDown=$bridge_starts fnUp=$bridge_stops siriReset=$siri_resets weTypeStart=$wetype_starts weTypeStop=$wetype_stops"
   exit 1
 fi
 
 wait "$receiver_pid"
 receiver_pid=""
-print -- "MULTICYCLE GREEN: $expected_cycles rounds started WeType, stopped, and submitted"
+print -- "MULTICYCLE GREEN: $expected_cycles rounds reset Siri, started WeType, stopped, and submitted"

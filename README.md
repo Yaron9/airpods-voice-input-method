@@ -62,13 +62,14 @@ App 必须获得 macOS“辅助功能”权限，才能模拟长按语音键和�
 SiriNCActionHearstDoubleTap - BluetoothHFP
 ```
 
-AirPods 只给 Siri 一次调用，不公开可用的按下/松开对。微信输入法则会忽略普通 `CGEvent` 注入。修复采用两项变化：
+AirPods 只给 Siri 一次调用，不公开可用的按下/松开对。微信输入法则会忽略普通 `CGEvent` 注入。修复采用四项变化：
 
-1. 只接受 `HearstDoubleTap/BluetoothHFP`，拒绝普通键盘和菜单栏 Siri 调用。
+1. 只接受 `HearstDoubleTap/Close + BluetoothHFP`，拒绝普通键盘和菜单栏 Siri 调用。
 2. 用 `IOHIDPostEvent` 发送真正的 Fn modifier `NX_FLAGSCHANGED + NX_SECONDARYFNMASK`。注入时保留用户正在按住的 Shift/Cmd/Option/Ctrl。
 3. 录音期间通过 `MPRemoteCommandCenter` 临时接管 AirPods 单击；停止后立即归还媒体控制，避免误启动 Music。
+4. 每轮启动时完整重置 Siri 宿主并立即在后台预热，确认新宿主完成启动后再注入 Fn。
 
-收到 AirPods 调用后，桥接器只结束本轮 `SiriNCService` 音频会话，保留负责接收下一次 AirPods 长按的 Siri 宿主；等待 150ms 完成音频释放和焦点恢复后，再启动微信输入法语音。
+旧方案只结束 `SiriNCService`，虽然释放了麦克风，却会让 AirPods 的 DoAP 会话停在 `Stream Ready`；下一次长按可能只是在取消上一轮 Siri，甚至不会进入桥接器。现在桥接器会结束 Siri 与 `SiriNCService`、立即后台拉起新宿主，并等待其完成 launch 后恢复原应用焦点和启动微信语音。这样既清除了上一轮蓝牙状态，也避免了单纯杀掉 Siri 后由 launchd 延迟重启的问题。
 
 ## 高级：配置其他语音按键
 
@@ -177,7 +178,7 @@ AIRPODS_BRIDGE_INSTALLER_SIGN_IDENTITY="Developer ID Installer: …" \
 - 使用默认配置通过 HID 层保持 Fn 2 秒，并从 WeType 系统日志验证录音确实 `startRunning` 和 `stopRunning`。
 - 验证所有支持的按键名称、大小写归一化、默认值和非法配置拒绝逻辑。
 - 使用独立前台接收器验证主动停止后确实收到 Return `keyCode 36`，并验证异常退出清理时不注入回车。
-- 连续回放四轮真实 AirPods 事件组合：`HearstDoubleTap/Close` 启动与媒体/Siri 两种单击停止路径交替出现；每一轮都必须从微信输入法系统日志验证录音启动和停止，并由前台接收器确认两次 Return 已完成发送。
+- 连续回放四轮真实 AirPods 事件组合：`HearstDoubleTap/Close` 启动与媒体/Siri 两种单击停止路径交替出现；每一轮都必须替换并预热 Siri 宿主，从微信输入法系统日志验证录音启动和停止，并由前台接收器确认两次 Return 已完成发送。
 - 验证录音期间单击若被 macOS 路由成 Siri `Close`，仍会和媒体单击一样停止并发送，不会只停止而漏发回车。
 - 在语音键按住期间发送 stop request，验证进程优雅退出前一定补发 key-up。
 

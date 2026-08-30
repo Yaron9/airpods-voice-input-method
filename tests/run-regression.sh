@@ -71,12 +71,22 @@ osascript -e 'tell application "TextEdit" to activate'
 sleep 0.5
 "$result_dir/select-wetype"
 test_start=$(date '+%Y-%m-%d %H:%M:%S')
+open -gj -a Siri
+sleep 0.3
+siri_pid_before=$(pgrep -x Siri | head -n 1)
 "$bridge" --self-test >"$result_dir/bridge.log" 2>&1
+siri_pid_after=$(pgrep -x Siri | head -n 1)
 sleep 0.5
 /usr/bin/log show --start "$test_start" --style compact \
   --predicate 'process == "WeType"' >"$result_dir/wetype.log"
 
 rg -q 'AirPods Siri invocation received' "$result_dir/bridge.log"
+rg -q 'Siri host restarted and prewarmed; hostReady=true' "$result_dir/bridge.log"
+if [[ -z "$siri_pid_before" || -z "$siri_pid_after" \
+      || "$siri_pid_before" == "$siri_pid_after" ]]; then
+  echo "SIRI SESSION RESET FAILED: host was not replaced and prewarmed" >&2
+  exit 1
+fi
 rg -q 'voiceKey=fn' "$result_dir/bridge.log"
 rg -q 'Voice key fn down' "$result_dir/bridge.log"
 rg -q 'Media remote stop controls active' "$result_dir/bridge.log"
