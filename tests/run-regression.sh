@@ -58,11 +58,12 @@ swiftc "$project_dir/tests/return-key-receiver.swift" -framework AppKit \
 "$bridge" --parser-test
 "$bridge" --permission-recovery-test
 
-"$bridge" --cycle-test >"$result_dir/two-cycle.log" 2>&1
-if [[ $(rg -c 'AirPods Siri invocation received' "$result_dir/two-cycle.log") != 2 ]] \
-  || [[ $(rg -c 'Voice key fn down' "$result_dir/two-cycle.log") != 2 ]] \
-  || [[ $(rg -c 'reason=AirPods single press' "$result_dir/two-cycle.log") != 2 ]]; then
-  echo "TWO-CYCLE FAILED: controller did not reset for a second voice interaction" >&2
+"$project_dir/tests/run-multicycle-e2e.sh"
+multicycle_log=/tmp/airpods-fn-test/multicycle-e2e/bridge.log
+if [[ $(rg -c 'AirPods Siri invocation received' "$multicycle_log") != 4 ]] \
+  || [[ $(rg -c 'Voice key fn down' "$multicycle_log") != 4 ]] \
+  || [[ $(rg -c 'reason=AirPods single press' "$multicycle_log") != 4 ]]; then
+  echo "MULTI-CYCLE FAILED: controller did not complete four voice interactions" >&2
   exit 1
 fi
 
@@ -114,6 +115,30 @@ if [[ ! -e "$return_marker" ]]; then
   exit 1
 fi
 wait "$receiver_pid"
+
+siri_stop_marker="$result_dir/siri-stop-return.received"
+siri_stop_ready="$result_dir/siri-stop-receiver.ready"
+[[ -e "$siri_stop_marker" ]] && unlink "$siri_stop_marker"
+[[ -e "$siri_stop_ready" ]] && unlink "$siri_stop_ready"
+"$result_dir/return-key-receiver" "$siri_stop_marker" "$siri_stop_ready" \
+  >"$result_dir/siri-stop-receiver.log" 2>&1 &
+siri_stop_receiver_pid=$!
+for _ in {1..30}; do
+  [[ -e "$siri_stop_ready" ]] && break
+  sleep 0.1
+done
+"$bridge" --siri-stop-test >"$result_dir/siri-stop-delivery.log" 2>&1
+for _ in {1..20}; do
+  [[ -e "$siri_stop_marker" ]] && break
+  sleep 0.1
+done
+if [[ ! -e "$siri_stop_marker" ]]; then
+  kill "$siri_stop_receiver_pid" 2>/dev/null || true
+  wait "$siri_stop_receiver_pid" 2>/dev/null || true
+  echo "SIRI STOP SUBMIT FAILED: Siri-routed AirPods stop did not send Return" >&2
+  exit 1
+fi
+wait "$siri_stop_receiver_pid"
 
 "$bridge" --voice-key option --self-test >"$result_dir/configurable-key.log" 2>&1
 rg -q 'voiceKey=option' "$result_dir/configurable-key.log"
@@ -207,9 +232,10 @@ rg -q 'Closing lower-priority app copy' "$result_dir/preferred-copy.log"
 
 echo "REGRESSION PASSED: AirPods long press -> Siri release -> HID Fn hold -> AirPods single press stop"
 echo "RETURN DELIVERY PASSED: frontmost application received commit + send Return sequence"
+echo "SIRI STOP SUBMIT PASSED: Siri-routed AirPods stop also submitted voice input"
 echo "CONFIGURABLE KEY PASSED: non-Fn option key performed down/up lifecycle"
 echo "LIFECYCLE PASSED: stop request during Fn-down performs graceful Fn-up cleanup"
 echo "LAUNCH RACE PASSED: a stop request present during launch is honored"
 echo "SINGLETON PASSED: a bridge from another checkout is reused, not duplicated"
 echo "APP SINGLETON PASSED: installed app closes downloaded or temporary copies"
-echo "TWO-CYCLE PASSED: one process completes two consecutive voice interactions"
+echo "MULTI-CYCLE PASSED: four rounds each started WeType, stopped, and submitted"

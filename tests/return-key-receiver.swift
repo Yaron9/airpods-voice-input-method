@@ -3,10 +3,13 @@ import Foundation
 
 private final class ReturnKeyView: NSView {
     let markerPath: String
+    let expectedCycles: Int
     private var returnCount = 0
+    private var completedCycles = 0
 
-    init(markerPath: String) {
+    init(markerPath: String, expectedCycles: Int) {
         self.markerPath = markerPath
+        self.expectedCycles = expectedCycles
         super.init(frame: NSRect(x: 0, y: 0, width: 320, height: 120))
     }
 
@@ -20,8 +23,18 @@ private final class ReturnKeyView: NSView {
         }
         returnCount += 1
         guard returnCount == 2 else { return }
-        FileManager.default.createFile(atPath: markerPath, contents: Data("return\n".utf8))
-        NSApp.terminate(nil)
+        returnCount = 0
+        completedCycles += 1
+        let line = "cycle \(completedCycles)\n"
+        if !FileManager.default.fileExists(atPath: markerPath) {
+            FileManager.default.createFile(atPath: markerPath, contents: Data())
+        }
+        if let handle = try? FileHandle(forWritingTo: URL(fileURLWithPath: markerPath)) {
+            _ = try? handle.seekToEnd()
+            try? handle.write(contentsOf: Data(line.utf8))
+            try? handle.close()
+        }
+        if completedCycles == expectedCycles { NSApp.terminate(nil) }
     }
 }
 
@@ -34,7 +47,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         let markerPath = CommandLine.arguments[1]
         readyPath = CommandLine.arguments[2]
-        let view = ReturnKeyView(markerPath: markerPath)
+        let expectedCycles = CommandLine.arguments.count > 3
+            ? (Int(CommandLine.arguments[3]) ?? 1) : 1
+        let view = ReturnKeyView(markerPath: markerPath, expectedCycles: expectedCycles)
         let window = NSWindow(
             contentRect: view.frame,
             styleMask: [.titled],

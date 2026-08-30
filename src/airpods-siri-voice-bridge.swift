@@ -351,9 +351,9 @@ private final class AirPodsVoiceController {
                 return
             }
             lastInvocation = now
-            writeLog("Second AirPods Siri invocation received; stopping voice input")
+            writeLog("AirPods Siri stop event received while recording; stopping and submitting voice input")
             terminateSiriAudioSession()
-            endVoiceKeyHold(reason: "second AirPods invocation")
+            endVoiceKeyHold(reason: "AirPods single press via Siri", submit: true)
             return
         }
         guard !busy, timeSinceLastInvocation >= duplicateWindow else {
@@ -659,7 +659,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         let selfTest = CommandLine.arguments.contains("--self-test")
         let returnTest = CommandLine.arguments.contains("--return-test")
         let cycleTest = CommandLine.arguments.contains("--cycle-test")
-        if !(selfTest || returnTest || cycleTest), !enforcePreferredInstance() { return }
+        let siriStopTest = CommandLine.arguments.contains("--siri-stop-test")
+        let replayTest = selfTest || returnTest || cycleTest || siriStopTest
+        if !replayTest, !enforcePreferredInstance() { return }
 
         let stopRequestTimer = Timer(timeInterval: 0.1, repeats: true) { _ in
             guard FileManager.default.fileExists(atPath: stopRequestURL.path) else { return }
@@ -679,11 +681,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         self.voiceKey = voiceKey
         let controller = AirPodsVoiceController(voiceKey: voiceKey)
         self.controller = controller
-        if !(selfTest || returnTest || cycleTest) {
+        if !replayTest {
             configureStatusMenu()
         }
-        guard controller.start(watchLogs: !(selfTest || returnTest || cycleTest)) else {
-            if selfTest || returnTest || cycleTest {
+        guard controller.start(watchLogs: !replayTest) else {
+            if replayTest {
                 NSApp.terminate(nil)
             } else {
                 updateStatusMenu()
@@ -710,37 +712,52 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSApp.terminate(nil)
             }
         } else if cycleTest {
-            let firstStart = 0.2
-            let holdDuration = 0.8
-            let secondStart = 1.5
-            DispatchQueue.main.asyncAfter(deadline: .now() + firstStart) {
-                controller.handleLogLine("CYCLE-1 SiriNCActionHearstDoubleTap - BluetoothHFP")
+            let holdDuration = duplicateWindow + 0.2
+            let cycleInterval = 2.6
+            let starts = [
+                airPodsHearstMarker, airPodsCloseMarker,
+                airPodsHearstMarker, airPodsCloseMarker,
+            ]
+            for (index, marker) in starts.enumerated() {
+                let cycle = index + 1
+                let start = 0.2 + Double(index) * cycleInterval
+                let stop = start + siriReleaseDelay + focusReactivationDelay + holdDuration
+                DispatchQueue.main.asyncAfter(deadline: .now() + start) {
+                    controller.handleLogLine("CYCLE-\(cycle)-START \(marker)")
+                }
+                if index == 1 {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + start + 0.04) {
+                        controller.handleLogLine("CYCLE-2-DUPLICATE \(airPodsCloseMarker)")
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + start + 0.75) {
+                        controller.handleLogLine("CYCLE-2-DELAYED-DUPLICATE \(airPodsCloseMarker)")
+                    }
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + stop) {
+                    if index.isMultiple(of: 2) {
+                        controller.handleAirPodsSinglePress()
+                    } else {
+                        controller.handleLogLine("CYCLE-\(cycle)-STOP \(airPodsCloseMarker)")
+                    }
+                }
             }
-            DispatchQueue.main.asyncAfter(
-                deadline: .now() + firstStart + siriReleaseDelay + focusReactivationDelay + holdDuration
-            ) {
-                controller.handleAirPodsSinglePress()
+            let finalStop = 0.2 + 3.0 * cycleInterval
+                + siriReleaseDelay + focusReactivationDelay + holdDuration
+            DispatchQueue.main.asyncAfter(deadline: .now() + finalStop + 1.5) {
+                NSApp.terminate(nil)
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + secondStart) {
-                // A real second AirPods long press can be reported as Close while
-                // Siri's dismissed UI is still resident. Replay that exact trace.
-                controller.handleLogLine("CYCLE-2 SiriNCActionClose - BluetoothHFP")
+        } else if siriStopTest {
+            let start = 0.2
+            let stop = start + siriReleaseDelay + focusReactivationDelay + duplicateWindow + 0.2
+            DispatchQueue.main.asyncAfter(deadline: .now() + start) {
+                controller.handleLogLine("START SiriNCActionHearstDoubleTap - BluetoothHFP")
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + secondStart + 0.04) {
-                // macOS emitted the same Close action twice, 43 ms apart, in the
-                // captured failure. The duplicate must not cancel the new cycle.
-                controller.handleLogLine("CYCLE-2-DUPLICATE SiriNCActionClose - BluetoothHFP")
+            DispatchQueue.main.asyncAfter(deadline: .now() + stop) {
+                // Captured on hardware when an AirPods single press was routed
+                // through Siri instead of MPRemoteCommandCenter.
+                controller.handleLogLine("STOP SiriNCActionClose - BluetoothHFP")
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + secondStart + 0.75) {
-                // Also cover a delayed duplicate arriving after Fn is already down.
-                controller.handleLogLine("CYCLE-2-DELAYED-DUPLICATE SiriNCActionClose - BluetoothHFP")
-            }
-            DispatchQueue.main.asyncAfter(
-                deadline: .now() + secondStart + siriReleaseDelay + focusReactivationDelay + holdDuration
-            ) {
-                controller.handleAirPodsSinglePress()
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + secondStart + 1.5) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + stop + 1.5) {
                 NSApp.terminate(nil)
             }
         }

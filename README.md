@@ -177,6 +177,8 @@ AIRPODS_BRIDGE_INSTALLER_SIGN_IDENTITY="Developer ID Installer: …" \
 - 使用默认配置通过 HID 层保持 Fn 2 秒，并从 WeType 系统日志验证录音确实 `startRunning` 和 `stopRunning`。
 - 验证所有支持的按键名称、大小写归一化、默认值和非法配置拒绝逻辑。
 - 使用独立前台接收器验证主动停止后确实收到 Return `keyCode 36`，并验证异常退出清理时不注入回车。
+- 连续回放四轮真实 AirPods 事件组合：`HearstDoubleTap/Close` 启动与媒体/Siri 两种单击停止路径交替出现；每一轮都必须从微信输入法系统日志验证录音启动和停止，并由前台接收器确认两次 Return 已完成发送。
+- 验证录音期间单击若被 macOS 路由成 Siri `Close`，仍会和媒体单击一样停止并发送，不会只停止而漏发回车。
 - 在语音键按住期间发送 stop request，验证进程优雅退出前一定补发 key-up。
 
 `--self-test` 使用 2 秒按住模式，测试结束后不会遗留录音；生产模式持续按住配置键，直到 AirPods 单击停止。
@@ -189,3 +191,5 @@ AIRPODS_BRIDGE_INSTALLER_SIGN_IDENTITY="Developer ID Installer: …" \
 - `scripts/build.sh`：构建。
 - `scripts/start.sh` / `scripts/stop.sh`：通过 `launchd` 持久启动，并在停止时执行 Fn 释放清理。
 - `tests/run-regression.sh`：端到端回归测试。
+- `tests/run-multicycle-e2e.sh`：四轮 AirPods 行为仿真，验证每轮微信录音启动、停止和发送。
+- `tests/hitl-two-cycle.sh`：需要实体 AirPods 时使用的两轮实时验收脚本。
