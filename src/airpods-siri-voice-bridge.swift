@@ -13,10 +13,14 @@ private func fnInjectorClose()
 @_silgen_name("fn_injector_merge_flags")
 private func fnInjectorMergeFlags(_ current: UInt64, _ down: Int32) -> UInt64
 
-private let airPodsInvocationMarker = "SiriNCActionHearstDoubleTap - BluetoothHFP"
+private let airPodsHearstMarker = "SiriNCActionHearstDoubleTap - BluetoothHFP"
+private let airPodsCloseMarker = "SiriNCActionClose - BluetoothHFP"
+private let airPodsInvocationMarkers = [airPodsHearstMarker, airPodsCloseMarker]
 private let weTypeStoppedMarker = "AVCaptureSession_Tundra stopRunning"
 private let logURL = URL(fileURLWithPath: "/tmp/airpods-fn-test/siri-bridge.log")
-private let stopRequestURL = URL(fileURLWithPath: "/tmp/airpods-fn-test/stop.request")
+private let stopRequestURL = URL(fileURLWithPath:
+    ProcessInfo.processInfo.environment["AIRPODS_BRIDGE_STOP_REQUEST_PATH"]
+        ?? "/tmp/airpods-fn-test/stop.request")
 private let siriReleaseDelay: TimeInterval = 0.10
 private let focusReactivationDelay: TimeInterval = 0.05
 private let finalTextCommitDelay: TimeInterval = 0.35
@@ -101,6 +105,52 @@ private func shouldYieldToOtherInstance(
     return otherPriority > ownPriority || (otherPriority == ownPriority && otherPID < ownPID)
 }
 
+@discardableResult
+private func scheduleDelayedLaunch(
+    targetURL: URL,
+    launcherURL: URL = URL(fileURLWithPath: "/usr/bin/open"),
+    delay: TimeInterval = 0.5
+) throws -> Process {
+    let helper = Process()
+    helper.executableURL = URL(fileURLWithPath: "/bin/sh")
+    helper.arguments = [
+        "-c", "sleep \"$1\"; exec \"$2\" \"$3\"",
+        "airpods-voice-bridge-relaunch", String(delay), launcherURL.path, targetURL.path,
+    ]
+    helper.standardOutput = FileHandle.nullDevice
+    helper.standardError = FileHandle.nullDevice
+    try helper.run()
+    return helper
+}
+
+private enum AccessibilityPermissionRecoveryEvent {
+    case startupDenied
+    case userConfirmedAuthorization
+}
+
+private enum AccessibilityPermissionRecoveryAction: Equatable {
+    case showAuthorizationHelp
+    case relaunch
+    case none
+}
+
+private struct AccessibilityPermissionRecoveryFlow {
+    private var startupWasDenied = false
+
+    mutating func handle(
+        _ event: AccessibilityPermissionRecoveryEvent
+    ) -> AccessibilityPermissionRecoveryAction {
+        switch event {
+        case .startupDenied:
+            startupWasDenied = true
+            return .showAuthorizationHelp
+        case .userConfirmedAuthorization:
+            guard startupWasDenied else { return .none }
+            return .relaunch
+        }
+    }
+}
+
 private func mergedModifierFlags(
     current: CGEventFlags, modifier: CGEventFlags, down: Bool
 ) -> CGEventFlags {
@@ -125,23 +175,25 @@ private func writeLog(_ message: String) {
 }
 
 private func isAirPodsSiriInvocation(_ line: String) -> Bool {
-    line.contains(airPodsInvocationMarker)
+    airPodsInvocationMarkers.contains { line.contains($0) }
 }
 
 private func isPlayPausePress(usagePage: UInt32, usage: UInt32, value: Int) -> Bool {
     usagePage == consumerUsagePage && usage == playPauseUsage && value != 0
 }
 
-private func terminateSiriAudioOwners() {
+private func terminateSiriAudioSession() {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
-    process.arguments = ["Siri", "SiriNCService"]
+    // Keep the Siri host alive: AirPods long-press events are delivered to it.
+    // Killing the host makes macOS wait tens of seconds before the next gesture works.
+    process.arguments = ["SiriNCService"]
     process.standardOutput = FileHandle.nullDevice
     process.standardError = FileHandle.nullDevice
     do {
         try process.run()
         process.waitUntilExit()
-        writeLog("Siri audio owners terminated; status=\(process.terminationStatus)")
+        writeLog("Siri audio session terminated; host preserved; status=\(process.terminationStatus)")
     } catch {
         writeLog("Could not terminate Siri audio owners: \(error.localizedDescription)")
     }
@@ -196,7 +248,7 @@ private final class AirPodsVoiceController {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/log")
         process.arguments = [
             "stream", "--style", "compact", "--level", "debug", "--predicate",
-            "(process == \"Siri\" AND eventMessage CONTAINS[c] \"SiriNCActionHearstDoubleTap\" AND eventMessage CONTAINS[c] \"BluetoothHFP\") OR (process == \"WeType\" AND eventMessage CONTAINS[c] \"AVCaptureSession_Tundra stopRunning\")",
+            "(process == \"Siri\" AND eventMessage CONTAINS[c] \"BluetoothHFP\" AND (eventMessage CONTAINS[c] \"SiriNCActionHearstDoubleTap\" OR eventMessage CONTAINS[c] \"SiriNCActionClose\")) OR (process == \"WeType\" AND eventMessage CONTAINS[c] \"AVCaptureSession_Tundra stopRunning\")",
         ]
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
@@ -287,14 +339,19 @@ private final class AirPodsVoiceController {
         }
         guard isAirPodsSiriInvocation(line) else { return }
         let now = Date()
+        let timeSinceLastInvocation = now.timeIntervalSince(lastInvocation)
         if voiceKeyIsDown {
+            if line.contains(airPodsCloseMarker), timeSinceLastInvocation < duplicateWindow {
+                writeLog("Ignored duplicate AirPods Siri invocation")
+                return
+            }
             lastInvocation = now
             writeLog("Second AirPods Siri invocation received; stopping voice input")
-            terminateSiriAudioOwners()
+            terminateSiriAudioSession()
             endVoiceKeyHold(reason: "second AirPods invocation")
             return
         }
-        guard !busy, now.timeIntervalSince(lastInvocation) >= duplicateWindow else {
+        guard !busy, timeSinceLastInvocation >= duplicateWindow else {
             writeLog("Ignored duplicate AirPods Siri invocation")
             return
         }
@@ -305,7 +362,7 @@ private final class AirPodsVoiceController {
         let targetPID = targetApplication?.processIdentifier ?? 0
         writeLog("AirPods Siri invocation received")
         writeLog("Captured target application; bundle=\(targetID); pid=\(targetPID)")
-        terminateSiriAudioOwners()
+        terminateSiriAudioSession()
         startTimer = Timer.scheduledTimer(withTimeInterval: siriReleaseDelay, repeats: false) { [weak self] _ in
             Task { @MainActor in self?.restoreFocusThenBeginFnHold() }
         }
@@ -484,7 +541,9 @@ private func runParserTests() -> Bool {
         ("#HotKey: event modifiers 100 type: 10", false),
         ("SiriNCActionHotkeyActivate - Accessibility", false),
         ("SiriNCActionHearstDoubleTap - Keyboard", false),
+        ("SiriNCActionClose - Keyboard", false),
         ("SiriNCActionHearstDoubleTap - BluetoothHFP", true),
+        ("SiriNCActionClose - BluetoothHFP", true),
         ("prefix SiriNCActionHearstDoubleTap - BluetoothHFP suffix", true),
     ]
     for (line, expected) in cases where isAirPodsSiriInvocation(line) != expected {
@@ -549,6 +608,35 @@ private func runParserTests() -> Bool {
     return true
 }
 
+private func runPermissionRecoveryTests() -> Bool {
+    var flow = AccessibilityPermissionRecoveryFlow()
+    guard flow.handle(.startupDenied) == .showAuthorizationHelp,
+          flow.handle(.userConfirmedAuthorization) == .relaunch else {
+        fputs("PERMISSION RECOVERY TEST FAILED\n", stderr)
+        return false
+    }
+
+    let markerURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("airpods-bridge-permission-relaunch-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: markerURL) }
+    do {
+        let helper = try scheduleDelayedLaunch(
+            targetURL: markerURL,
+            launcherURL: URL(fileURLWithPath: "/usr/bin/touch"),
+            delay: 0)
+        helper.waitUntilExit()
+    } catch {
+        fputs("PERMISSION RECOVERY HELPER TEST FAILED: \(error.localizedDescription)\n", stderr)
+        return false
+    }
+    guard FileManager.default.fileExists(atPath: markerURL.path) else {
+        fputs("PERMISSION RECOVERY HELPER TEST FAILED: delayed launcher did not run\n", stderr)
+        return false
+    }
+    print("PERMISSION RECOVERY TEST PASSED: authorization confirmation forces a fresh process")
+    return true
+}
+
 @MainActor
 private final class AppDelegate: NSObject, NSApplicationDelegate {
     private var controller: AirPodsVoiceController?
@@ -558,13 +646,14 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private var toggleItem: NSMenuItem?
     private var voiceKey: VoiceActivationKey?
     private var instructionsPopover: NSPopover?
-    private var permissionRetryTimer: Timer?
     private var startFailureAlert: NSAlert?
+    private var permissionRecoveryFlow = AccessibilityPermissionRecoveryFlow()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let selfTest = CommandLine.arguments.contains("--self-test")
         let returnTest = CommandLine.arguments.contains("--return-test")
-        if !(selfTest || returnTest), !enforcePreferredInstance() { return }
+        let cycleTest = CommandLine.arguments.contains("--cycle-test")
+        if !(selfTest || returnTest || cycleTest), !enforcePreferredInstance() { return }
 
         let stopRequestTimer = Timer(timeInterval: 0.1, repeats: true) { _ in
             guard FileManager.default.fileExists(atPath: stopRequestURL.path) else { return }
@@ -584,11 +673,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         self.voiceKey = voiceKey
         let controller = AirPodsVoiceController(voiceKey: voiceKey)
         self.controller = controller
-        if !(selfTest || returnTest) {
+        if !(selfTest || returnTest || cycleTest) {
             configureStatusMenu()
         }
-        guard controller.start(watchLogs: !(selfTest || returnTest)) else {
-            if selfTest || returnTest {
+        guard controller.start(watchLogs: !(selfTest || returnTest || cycleTest)) else {
+            if selfTest || returnTest || cycleTest {
                 NSApp.terminate(nil)
             } else {
                 updateStatusMenu()
@@ -614,12 +703,45 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                 NSApp.terminate(nil)
             }
+        } else if cycleTest {
+            let firstStart = 0.2
+            let holdDuration = 0.8
+            let secondStart = 1.5
+            DispatchQueue.main.asyncAfter(deadline: .now() + firstStart) {
+                controller.handleLogLine("CYCLE-1 SiriNCActionHearstDoubleTap - BluetoothHFP")
+            }
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + firstStart + siriReleaseDelay + focusReactivationDelay + holdDuration
+            ) {
+                controller.handleAirPodsSinglePress()
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + secondStart) {
+                // A real second AirPods long press can be reported as Close while
+                // Siri's dismissed UI is still resident. Replay that exact trace.
+                controller.handleLogLine("CYCLE-2 SiriNCActionClose - BluetoothHFP")
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + secondStart + 0.04) {
+                // macOS emitted the same Close action twice, 43 ms apart, in the
+                // captured failure. The duplicate must not cancel the new cycle.
+                controller.handleLogLine("CYCLE-2-DUPLICATE SiriNCActionClose - BluetoothHFP")
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + secondStart + 0.75) {
+                // Also cover a delayed duplicate arriving after Fn is already down.
+                controller.handleLogLine("CYCLE-2-DELAYED-DUPLICATE SiriNCActionClose - BluetoothHFP")
+            }
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + secondStart + siriReleaseDelay + focusReactivationDelay + holdDuration
+            ) {
+                controller.handleAirPodsSinglePress()
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + secondStart + 1.5) {
+                NSApp.terminate(nil)
+            }
         }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         stopRequestTimer?.invalidate()
-        permissionRetryTimer?.invalidate()
         controller?.stop()
     }
 
@@ -774,45 +896,62 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showStartFailure() {
-        if !CGPreflightPostEventAccess() { beginPermissionRetrying() }
         guard startFailureAlert == nil else { return }
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = "无法启动语音桥接"
-        alert.informativeText = "请在“系统设置 → 隐私与安全性 → 辅助功能”中允许 AirPods Voice Bridge。授权生效后 App 会自动启动。"
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "知道了")
+
+        guard !CGPreflightPostEventAccess() else {
+            alert.informativeText = "辅助功能权限已生效，但桥接器启动失败。请退出 App 后查看日志。"
+            alert.addButton(withTitle: "知道了")
+            startFailureAlert = alert
+            alert.runModal()
+            if startFailureAlert === alert { startFailureAlert = nil }
+            return
+        }
+
+        _ = permissionRecoveryFlow.handle(.startupDenied)
+        alert.informativeText = "请在“系统设置 → 隐私与安全性 → 辅助功能”中允许 AirPods Voice Bridge。已经打开开关时无需重复添加，请点击“已授权，重新启动”，让 macOS 在新进程中刷新权限。"
+        alert.addButton(withTitle: "已授权，重新启动")
+        alert.addButton(withTitle: "打开辅助功能设置")
+        alert.addButton(withTitle: "取消")
         startFailureAlert = alert
-        alert.runModal()
+        let response = alert.runModal()
         if startFailureAlert === alert { startFailureAlert = nil }
+
+        switch response {
+        case .alertFirstButtonReturn:
+            if permissionRecoveryFlow.handle(.userConfirmedAuthorization) == .relaunch {
+                relaunchApplication()
+            }
+        case .alertSecondButtonReturn:
+            openAccessibilitySettings()
+        default:
+            break
+        }
     }
 
-    private func beginPermissionRetrying() {
-        guard permissionRetryTimer == nil else { return }
-        let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.retryStartAfterPermissionGrant() }
-        }
-        permissionRetryTimer = timer
-        RunLoop.main.add(timer, forMode: .common)
+    private func openAccessibilitySettings() {
+        guard let url = URL(
+            string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+        ) else { return }
+        NSWorkspace.shared.open(url)
     }
 
-    private func retryStartAfterPermissionGrant() {
-        guard CGPreflightPostEventAccess() else { return }
-        permissionRetryTimer?.invalidate()
-        permissionRetryTimer = nil
-
-        if let alert = startFailureAlert {
-            NSApp.abortModal()
-            alert.window.orderOut(nil)
-            startFailureAlert = nil
+    private func relaunchApplication() {
+        let appURL = Bundle.main.bundleURL
+        guard appURL.pathExtension == "app" else {
+            writeLog("Permission recovery relaunch refused; bundle path is not an app: \(appURL.path)")
+            return
         }
-        guard let controller, !controller.isRunning else { return }
-        if controller.start() {
-            writeLog("Accessibility permission became available; bridge started automatically")
-        } else {
-            showStartFailure()
+        do {
+            try scheduleDelayedLaunch(targetURL: appURL)
+            writeLog("Accessibility authorization confirmed; relaunching app to refresh permission state")
+            NSApp.terminate(nil)
+        } catch {
+            writeLog("Could not schedule permission recovery relaunch: \(error.localizedDescription)")
         }
-        updateStatusMenu()
     }
 
     @objc private func quitApplication() {
@@ -822,6 +961,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
 if CommandLine.arguments.contains("--parser-test") {
     exit(runParserTests() ? 0 : 1)
+}
+
+if CommandLine.arguments.contains("--permission-recovery-test") {
+    exit(runPermissionRecoveryTests() ? 0 : 1)
 }
 
 MainActor.assumeIsolated {

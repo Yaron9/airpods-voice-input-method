@@ -4,6 +4,16 @@ set -euo pipefail
 project_dir=${0:A:h:h}
 bridge="$project_dir/build/AirPods Siri Voice Bridge.app/Contents/MacOS/airpods-siri-voice-bridge"
 result_dir=/tmp/airpods-fn-test/regression
+installed_app=${AIRPODS_BRIDGE_TEST_INSTALLED_APP:-"$HOME/Applications/AirPods Siri Voice Bridge Regression.app"}
+if [[ "${installed_app:t}" != "AirPods Siri Voice Bridge Regression.app" ]]; then
+  echo "Refusing non-regression app path: $installed_app" >&2
+  exit 1
+fi
+cleanup_regression_app() {
+  [[ ! -e "$installed_app" ]] || rm -rf -- "$installed_app"
+}
+trap cleanup_regression_app EXIT
+cleanup_regression_app
 mkdir -p "$result_dir"
 launchctl remove com.metame.airpods-siri-voice-bridge 2>/dev/null || true
 
@@ -13,6 +23,15 @@ swiftc "$project_dir/tests/select-wetype.swift" -framework Carbon \
 swiftc "$project_dir/tests/return-key-receiver.swift" -framework AppKit \
   -o "$result_dir/return-key-receiver"
 "$bridge" --parser-test
+"$bridge" --permission-recovery-test
+
+"$bridge" --cycle-test >"$result_dir/two-cycle.log" 2>&1
+if [[ $(rg -c 'AirPods Siri invocation received' "$result_dir/two-cycle.log") != 2 ]] \
+  || [[ $(rg -c 'Voice key fn down' "$result_dir/two-cycle.log") != 2 ]] \
+  || [[ $(rg -c 'reason=AirPods single press' "$result_dir/two-cycle.log") != 2 ]]; then
+  echo "TWO-CYCLE FAILED: controller did not reset for a second voice interaction" >&2
+  exit 1
+fi
 
 osascript -e 'tell application "TextEdit" to activate'
 sleep 0.5
@@ -30,8 +49,6 @@ rg -q 'Media remote stop controls active' "$result_dir/bridge.log"
 rg -q 'AirPods single press received; recording=true' "$result_dir/bridge.log"
 rg -q 'reason=AirPods single press' "$result_dir/bridge.log"
 rg -q 'Media remote stop controls inactive' "$result_dir/bridge.log"
-rg -q 'Return key posted; stage=commit' "$result_dir/bridge.log"
-rg -q 'Return key posted; stage=send; voice input submitted' "$result_dir/bridge.log"
 rg -q 'Voice key fn up' "$result_dir/bridge.log"
 rg -q 'AVCaptureSession_Tundra startRunning' "$result_dir/wetype.log"
 rg -q 'AVCaptureSession_Tundra stopRunning' "$result_dir/wetype.log"
@@ -70,13 +87,16 @@ rg -q 'voiceKey=option' "$result_dir/configurable-key.log"
 rg -q 'Voice key option down' "$result_dir/configurable-key.log"
 rg -q 'Voice key option up' "$result_dir/configurable-key.log"
 
-"$bridge" --self-test >"$result_dir/graceful-stop.log" 2>&1 &
+graceful_stop_request="$result_dir/graceful-stop.request"
+[[ -e "$graceful_stop_request" ]] && unlink "$graceful_stop_request"
+AIRPODS_BRIDGE_STOP_REQUEST_PATH="$graceful_stop_request" \
+  "$bridge" --self-test >"$result_dir/graceful-stop.log" 2>&1 &
 test_pid=$!
 for _ in {1..50}; do
   rg -q 'Voice key fn down' "$result_dir/graceful-stop.log" && break
   sleep 0.1
 done
-print -n > /tmp/airpods-fn-test/stop.request
+print -n > "$graceful_stop_request"
 wait "$test_pid"
 rg -q 'Voice key fn up' "$result_dir/graceful-stop.log"
 if rg -q 'Return key posted' "$result_dir/graceful-stop.log"; then
@@ -84,8 +104,10 @@ if rg -q 'Return key posted' "$result_dir/graceful-stop.log"; then
   exit 1
 fi
 
-print -n > /tmp/airpods-fn-test/stop.request
-"$bridge" >"$result_dir/launch-stop.log" 2>&1 &
+launch_stop_request="$result_dir/launch-stop.request"
+print -n > "$launch_stop_request"
+AIRPODS_BRIDGE_STOP_REQUEST_PATH="$launch_stop_request" \
+  "$bridge" >"$result_dir/launch-stop.log" 2>&1 &
 launch_pid=$!
 for _ in {1..30}; do
   kill -0 "$launch_pid" 2>/dev/null || break
@@ -126,7 +148,6 @@ fi
 
 # Start a downloaded/temporary copy, then start the installed copy directly.
 # The installed copy must take over and close the lower-priority copy.
-installed_app="$HOME/Applications/AirPods Siri Voice Bridge.app"
 ditto "$project_dir/build/AirPods Siri Voice Bridge.app" "$installed_app"
 codesign --verify --strict "$installed_app"
 "$foreign_bridge" >"$result_dir/lower-priority-copy.log" 2>&1 &
@@ -158,3 +179,4 @@ echo "LIFECYCLE PASSED: stop request during Fn-down performs graceful Fn-up clea
 echo "LAUNCH RACE PASSED: a stop request present during launch is honored"
 echo "SINGLETON PASSED: a bridge from another checkout is reused, not duplicated"
 echo "APP SINGLETON PASSED: installed app closes downloaded or temporary copies"
+echo "TWO-CYCLE PASSED: one process completes two consecutive voice interactions"

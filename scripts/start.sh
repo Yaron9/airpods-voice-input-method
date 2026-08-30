@@ -5,7 +5,7 @@ project_dir=${0:A:h:h}
 runtime_dir=/tmp/airpods-fn-test
 pid_file="$runtime_dir/bridge.pid"
 launch_label=com.metame.airpods-siri-voice-bridge
-installed_app="$HOME/Applications/AirPods Siri Voice Bridge.app"
+installed_app="/Applications/AirPods Siri Voice Bridge.app"
 installed_executable="$installed_app/Contents/MacOS/airpods-siri-voice-bridge"
 voice_key_file=${AIRPODS_BRIDGE_VOICE_KEY_FILE:-"$project_dir/config/voice-key"}
 if [[ -n "${AIRPODS_BRIDGE_VOICE_KEY:-}" ]]; then
@@ -49,16 +49,20 @@ fi
 if [[ -e "$runtime_dir/stop.request" ]]; then
   unlink "$runtime_dir/stop.request"
 fi
-"$project_dir/scripts/build.sh" >/dev/null
-built_app="$project_dir/build/AirPods Siri Voice Bridge.app"
-ditto "$built_app" "$installed_app"
-codesign --verify --strict --verbose=2 "$installed_app"
-"$lsregister" -f "$installed_app"
+if [[ -x "$installed_executable" ]]; then
+  app_to_launch="$installed_app"
+else
+  "$project_dir/scripts/build.sh" >/dev/null
+  app_to_launch="$project_dir/build/AirPods Siri Voice Bridge.app"
+fi
+executable_to_launch="$app_to_launch/Contents/MacOS/airpods-siri-voice-bridge"
+codesign --verify --strict --verbose=2 "$app_to_launch"
+"$lsregister" -f "$app_to_launch"
 launchctl remove "$launch_label" 2>/dev/null || true
 launchctl submit -l "$launch_label" \
   -o "$runtime_dir/bridge.stdout.log" \
   -e "$runtime_dir/bridge.stderr.log" \
-  -- "$installed_executable" --voice-key "$voice_key"
+  -- "$executable_to_launch" --voice-key "$voice_key"
 
 bridge_pid=""
 for _ in {1..30}; do
