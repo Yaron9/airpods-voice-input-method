@@ -7,7 +7,9 @@ bridge="$project_dir/build/AirPods Siri Voice Bridge.app/Contents/MacOS/airpods-
 marker="$result_dir/return-cycles.log"
 ready="$result_dir/receiver.ready"
 expected_cycles=4
-expected_siri_resets=6
+expected_siri_resets=0
+expected_siri_dismissals=4
+expected_doap_releases=4
 receiver_pid=""
 
 cleanup() {
@@ -53,6 +55,8 @@ fi
 bridge_starts=$(rg -c 'Voice key fn down' "$result_dir/bridge.log" || true)
 bridge_stops=$(rg -c 'Voice key fn up; voice input stopped' "$result_dir/bridge.log" || true)
 siri_resets=$(rg -c 'Siri host restarted and prewarmed; hostReady=true' "$result_dir/bridge.log" || true)
+siri_dismissals=$(rg -c 'Siri Escape posted' "$result_dir/bridge.log" || true)
+doap_releases=$(rg -c 'AirPods DoAP audio stopped; starting voice input' "$result_dir/bridge.log" || true)
 wetype_starts=$(rg -c 'AVCaptureSession_Tundra startRunning' "$result_dir/wetype.log" || true)
 wetype_stops=$(rg -c 'AVCaptureSession_Tundra stopRunning' "$result_dir/wetype.log" || true)
 
@@ -60,12 +64,14 @@ if (( completed_cycles != expected_cycles \
       || bridge_starts != expected_cycles \
       || bridge_stops != expected_cycles \
       || siri_resets != expected_siri_resets \
+      || siri_dismissals != expected_siri_dismissals \
+      || doap_releases != expected_doap_releases \
       || wetype_starts < expected_cycles \
       || wetype_stops < expected_cycles )); then
-  print -u2 -- "MULTICYCLE RED: expected=$expected_cycles sent=$completed_cycles fnDown=$bridge_starts fnUp=$bridge_stops siriReset=$siri_resets/$expected_siri_resets weTypeStart=$wetype_starts weTypeStop=$wetype_stops"
+  print -u2 -- "MULTICYCLE RED: expected=$expected_cycles sent=$completed_cycles fnDown=$bridge_starts fnUp=$bridge_stops siriReset=$siri_resets/$expected_siri_resets siriDismiss=$siri_dismissals/$expected_siri_dismissals doapRelease=$doap_releases/$expected_doap_releases weTypeStart=$wetype_starts weTypeStop=$wetype_stops"
   exit 1
 fi
 
 wait "$receiver_pid"
 receiver_pid=""
-print -- "MULTICYCLE GREEN: $expected_cycles rounds reset Siri after starts/media stops, started WeType, stopped, and submitted"
+print -- "MULTICYCLE GREEN: $expected_cycles rounds dismissed Siri through DoAP, started WeType, stopped, and submitted"

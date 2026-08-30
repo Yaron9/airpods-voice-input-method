@@ -58,10 +58,10 @@ swiftc "$project_dir/tests/return-key-receiver.swift" -framework AppKit \
 "$bridge" --parser-test
 "$bridge" --permission-recovery-test
 "$bridge" --siri-reset-failure-test >"$result_dir/siri-reset-failure.log" 2>&1
-rg -q 'Voice input start aborted; replacement Siri host was not ready' \
+rg -q 'Voice input start aborted; Siri could not be dismissed normally' \
   "$result_dir/siri-reset-failure.log"
 if rg -q 'Voice key .* down' "$result_dir/siri-reset-failure.log"; then
-  echo "SIRI RESET FAILURE TEST FAILED: voice input started without a ready Siri host" >&2
+  echo "SIRI DISMISS FAILURE TEST FAILED: voice input started before Siri dismissed" >&2
   exit 1
 fi
 "$bridge" --stop-start-during-submit-test >"$result_dir/stop-start-during-submit.log" 2>&1
@@ -97,10 +97,11 @@ sleep 0.5
   --predicate 'process == "WeType"' >"$result_dir/wetype.log"
 
 rg -q 'AirPods Siri invocation received' "$result_dir/bridge.log"
-rg -q 'Siri host restarted and prewarmed; hostReady=true' "$result_dir/bridge.log"
+rg -q 'Siri Escape posted' "$result_dir/bridge.log"
+rg -q 'AirPods DoAP audio stopped; starting voice input' "$result_dir/bridge.log"
 if [[ -z "$siri_pid_before" || -z "$siri_pid_after" \
-      || "$siri_pid_before" == "$siri_pid_after" ]]; then
-  echo "SIRI SESSION RESET FAILED: host was not replaced and prewarmed" >&2
+      || "$siri_pid_before" != "$siri_pid_after" ]]; then
+  echo "SIRI DISMISS FAILED: Siri host was killed instead of dismissed normally" >&2
   exit 1
 fi
 rg -q 'voiceKey=fn' "$result_dir/bridge.log"
@@ -264,7 +265,7 @@ wait "$preferred_pid"
 rg -q 'Closing lower-priority app copy' "$result_dir/preferred-copy.log"
 
 echo "REGRESSION PASSED: AirPods long press -> Siri release -> HID Fn hold -> AirPods single press stop"
-echo "SIRI RESET GUARD PASSED: voice input is blocked until a replacement Siri host is ready"
+echo "SIRI DISMISS GUARD PASSED: voice input waits for AirPods DoAP audio stop"
 echo "RETURN DELIVERY PASSED: frontmost application received commit + send Return sequence"
 echo "SIRI STOP SUBMIT PASSED: Siri-routed AirPods stop also submitted voice input"
 echo "LONG-PRESS SAFETY PASSED: a second long press stopped without submitting"

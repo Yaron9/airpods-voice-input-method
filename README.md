@@ -67,10 +67,10 @@ AirPods 只给 Siri 一次调用，不公开可用的按下/松开对。微信�
 1. 只接受 `HearstDoubleTap/Close + BluetoothHFP`，拒绝普通键盘和菜单栏 Siri 调用。
 2. 用 `IOHIDPostEvent` 发送真正的 Fn modifier `NX_FLAGSCHANGED + NX_SECONDARYFNMASK`。注入时保留用户正在按住的 Shift/Cmd/Option/Ctrl。
 3. 录音期间通过 `MPRemoteCommandCenter` 临时接管 AirPods 单击；停止后立即归还媒体控制，避免误启动 Music。
-4. 每轮启动时完整重置 Siri 宿主并立即在后台预热，确认新宿主完成启动后再注入 Fn。
-5. 如果单击被媒体控制接收，停止和发送后再次复位 Siri 会话；否则这次单击不会产生 Siri `Close`，DoAP 会话会残留并吞掉下一次长按。
+4. 每轮启动时向 Siri 宿主发送 Escape，让 Siri 走正常关闭流程；只有观察到 BTLEServerAgent 的 `DoAPSiri AudioDidStop` 后才注入 Fn。
+5. 单击停止由媒体控制接收并自动发送；由于启动阶段已经完成 `StopStreaming`，结束后不再杀死或重启 Siri，下一次长按仍是全新的 AirPods 会话。
 
-旧方案只结束 `SiriNCService`，虽然释放了麦克风，却会让 AirPods 的 DoAP 会话停在 `Stream Ready`；下一次长按可能只是在取消上一轮 Siri，甚至不会进入桥接器。现在桥接器会在启动前以及媒体单击停止后结束 Siri 与 `SiriNCService`、立即后台拉起新宿主，并等待其完成 launch 后恢复原应用焦点。这样既清除了上一轮蓝牙状态，也避免了单纯杀掉 Siri 后由 launchd 延迟重启的问题。
+旧方案结束 `Siri`/`SiriNCService` 进程，虽然释放了麦克风，却绕过了 Siri 的正常关闭回调，让 AirPods 的 DoAP 会话停在 `Stream Ready`；下一次长按会在到达桥接器之前被系统吞掉。现在桥接器保留 Siri 宿主，通过 Escape 触发正式 dismissal，并等待系统发出 `AudioDidStop → StopStreaming` 后恢复原应用焦点和启动语音输入。这是连续多轮可用的关键。
 
 ## 高级：配置其他语音按键
 
