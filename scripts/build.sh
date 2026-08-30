@@ -7,42 +7,52 @@ app_dir="$build_dir/AirPods Siri Voice Bridge.app"
 contents_dir="$app_dir/Contents"
 macos_dir="$contents_dir/MacOS"
 executable="$macos_dir/airpods-siri-voice-bridge"
-target_arch=$(uname -m)
 deployment_target=13.0
-if [[ -n "${AIRPODS_BRIDGE_SIGN_IDENTITY:-}" ]]; then
-  sign_identity=$AIRPODS_BRIDGE_SIGN_IDENTITY
-else
-  sign_identity=$(security find-identity -v -p codesigning \
-    | sed -n 's/.*"\(Apple Development:[^"]*\)".*/\1/p' \
-    | head -n 1)
-fi
+sign_identity=${AIRPODS_BRIDGE_SIGN_IDENTITY:--}
 mkdir -p "$macos_dir"
 
-if [[ -z "$sign_identity" ]] || ! security find-identity -v -p codesigning | grep -Fq "\"$sign_identity\""; then
-  echo "No Apple Development signing identity is available." >&2
-  echo "Add your Apple ID in Xcode, or set AIRPODS_BRIDGE_SIGN_IDENTITY explicitly." >&2
+if [[ "$sign_identity" != "-" ]] \
+  && ! security find-identity -v -p codesigning | grep -Fq "\"$sign_identity\""; then
+  echo "Code-signing identity is unavailable: $sign_identity" >&2
   exit 1
 fi
 
-clang -Wall -Wextra -Werror -Wno-deprecated-declarations \
-  -mmacosx-version-min="$deployment_target" \
-  -c "$project_dir/src/fn-injector.c" \
-  -o "$build_dir/fn-injector.o"
+architectures=(arm64 x86_64)
+arch_executables=()
+for target_arch in $architectures; do
+  object_file="$build_dir/fn-injector-$target_arch.o"
+  arch_executable="$build_dir/airpods-siri-voice-bridge-$target_arch"
 
-swiftc \
-  -target "${target_arch}-apple-macosx${deployment_target}" \
-  "$project_dir/src/airpods-siri-voice-bridge.swift" \
-  "$build_dir/fn-injector.o" \
-  -framework AppKit \
-  -framework CoreGraphics \
-  -framework IOKit \
-  -framework MediaPlayer \
-  -o "$executable"
+  clang -Wall -Wextra -Werror -Wno-deprecated-declarations \
+    -arch "$target_arch" \
+    -mmacosx-version-min="$deployment_target" \
+    -c "$project_dir/src/fn-injector.c" \
+    -o "$object_file"
+
+  swiftc \
+    -target "${target_arch}-apple-macosx${deployment_target}" \
+    "$project_dir/src/airpods-siri-voice-bridge.swift" \
+    "$object_file" \
+    -framework AppKit \
+    -framework CoreGraphics \
+    -framework IOKit \
+    -framework MediaPlayer \
+    -o "$arch_executable"
+  arch_executables+=("$arch_executable")
+done
+
+lipo -create "${arch_executables[@]}" -output "$executable"
 
 cp "$project_dir/resources/Info.plist" "$contents_dir/Info.plist"
-codesign --force --sign "$sign_identity" \
-  --identifier com.yaron.airpods-siri-voice-bridge \
-  --options runtime --timestamp=none "$app_dir"
+if [[ "$sign_identity" == "-" ]]; then
+  codesign --force --sign - \
+    --identifier com.yaron.airpods-siri-voice-bridge \
+    --options runtime --timestamp=none "$app_dir"
+else
+  codesign --force --sign "$sign_identity" \
+    --identifier com.yaron.airpods-siri-voice-bridge \
+    --options runtime --timestamp "$app_dir"
+fi
 codesign --verify --strict --verbose=2 "$app_dir"
 
 echo "$app_dir"

@@ -2,6 +2,18 @@
 
 一个原生 macOS 菜单栏 App：长按 AirPods 左耳启动语音输入，单击停止并发送。App 不占用 Dock，只提供运行状态、启动、停止、使用说明和退出。
 
+## 普通用户安装
+
+不需要 Xcode、开发证书或 BetterTouchTool：
+
+1. 下载发布页中的 `AirPods-Siri-Voice-Bridge-*-macOS.zip` 并解压。
+2. 把 **AirPods Siri Voice Bridge.app** 拖进“应用程序”文件夹。
+3. 第一次双击尝试打开。由于当前测试版没有 Apple Developer ID 公证，macOS 会阻止启动。
+4. 打开“系统设置 → 隐私与安全性”，向下找到刚被阻止的 App，点击“仍要打开”并确认。
+5. 按照下文完成语音输入法、AirPods 左耳和辅助功能三项设置。
+
+上述 Gatekeeper 操作只需在首次安装或更新版本后进行。只从本仓库发布页或作者提供的可信渠道下载文件。
+
 ## 使用前必须设置
 
 ### 1. 设置语音输入法
@@ -28,15 +40,15 @@
 
 App 必须获得 macOS“辅助功能”权限，才能模拟长按语音键和发送回车：
 
-1. 先运行一次 `./scripts/start.sh`。App 会安装到 `~/Applications/AirPods Siri Voice Bridge.app`；首次启动时 macOS 可能自动弹出授权提示。
+1. 先运行一次 App；首次启动时 macOS 可能自动弹出授权提示。
 2. 打开“系统设置 → 隐私与安全性 → 辅助功能”。
 3. 找到 **AirPods Siri Voice Bridge** 并打开右侧开关。
-4. 如果列表中没有它，点击 `+`，按 `Command + Shift + G`，输入 `~/Applications`，选择 **AirPods Siri Voice Bridge.app**。
-5. 回到菜单栏，点击波形图标并选择“启动”；必要时退出 App 后重新运行 `./scripts/start.sh`。
+4. 如果列表中没有它，点击 `+`，从“应用程序”文件夹选择 **AirPods Siri Voice Bridge.app**。源码开发版位于 `~/Applications`。
+5. 回到菜单栏，点击波形图标并选择“启动”；必要时退出并重新打开 App。
 
 必须授权的对象是 **AirPods Siri Voice Bridge.app**，不需要给 BetterTouchTool、终端或开发工具授权。桥接 App 本身不采集麦克风，麦克风权限由你使用的语音输入法自行管理，也不需要“完全磁盘访问”。当前实机验证只需“辅助功能”；如果其他 macOS 版本因备用的耳机按键监听额外弹出“输入监控”提示，仅在单击无法停止时按系统提示授权即可。
 
-如果系统已经打开开关但 App 仍提示无权限，请删除辅助功能列表中的旧条目，再从 `~/Applications` 重新添加上述 App。不要授权 `build/` 目录中的临时构建版本。
+如果系统已经打开开关但 App 仍提示无权限，请删除辅助功能列表中的旧条目，再从“应用程序”文件夹重新添加上述 App。不要授权 `build/` 目录中的临时构建版本。
 
 ## 已解决的根因
 
@@ -88,7 +100,7 @@ AIRPODS_BRIDGE_VOICE_KEY=option ./scripts/start.sh
 
 ## 使用
 
-前提：已完成上面的三项设置。构建需要 Xcode 中可用的 Apple Development 证书；也可通过 `AIRPODS_BRIDGE_SIGN_IDENTITY` 指定证书。
+普通用户直接打开“应用程序”文件夹中的 App。源码开发者完成上面的三项设置后，可运行：
 
 ```bash
 ./scripts/start.sh
@@ -114,7 +126,7 @@ MacBook 菜单栏图标过多时，部分图标会被摄像头刘海遮住。App
 - 单击 AirPods：结束语音输入，先用一次回车确认输入法组合文字，再用第二次回车发送。
 - 停止桥接器：`./scripts/stop.sh`
 - 启动脚本通过当前图形会话的 `launchd` 托管桥接器；关闭终端或开发工具不会导致桥接器退出。
-- 构建产物是使用 Apple Development 证书签名的 App Bundle，并安装到 `~/Applications/AirPods Siri Voice Bridge.app`，避免重编译后 TCC 权限因 CDHash 改变而失效。
+- 源码启动脚本会把稳定的 App Bundle 安装到 `~/Applications/AirPods Siri Voice Bridge.app`，避免每次从临时构建路径授权。
 - 长按 AirPods 后会关闭 Siri，重新激活触发前的应用并恢复输入焦点，然后持续按住配置的语音键；录音期间单击 AirPods 会释放该键、结束输入并发送回车。
 - 只有主动单击停止且原应用仍保持焦点时才发送回车；切换焦点、安全超时或桥接器退出时不会误发送。
 - 使用微信输入法时，若它自行结束录音，桥接器也会立即释放语音键。
@@ -122,6 +134,22 @@ MacBook 菜单栏图标过多时，部分图标会被摄像头刘海遮住。App
 - 运行日志：`/tmp/airpods-fn-test/siri-bridge.log`
 
 桥接器不会创建 LaunchAgent，也不会开机自启。
+
+## 打包给别人使用
+
+运行：
+
+```bash
+./scripts/package-release.sh
+```
+
+脚本会生成同时支持 Apple Silicon 和 Intel Mac 的 ZIP，位置在 `dist/`。默认使用 ad-hoc 签名，不需要 Apple 开发证书；用户需要按“普通用户安装”中的步骤首次手动允许。
+
+如果以后希望付费用户双击即可正常安装，建议加入 Apple Developer Program，改用 Developer ID 签名并公证，而不必上架 Mac App Store。可通过 `AIRPODS_BRIDGE_SIGN_IDENTITY` 指定 Developer ID：
+
+```bash
+AIRPODS_BRIDGE_SIGN_IDENTITY="Developer ID Application: …" ./scripts/package-release.sh
+```
 
 ## 许可与贡献
 
