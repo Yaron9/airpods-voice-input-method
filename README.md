@@ -179,7 +179,7 @@ AIRPODS_BRIDGE_INSTALLER_SIGN_IDENTITY="Developer ID Installer: …" \
 - 使用默认配置通过 HID 层保持 Fn 2 秒，并从 WeType 系统日志验证录音确实 `startRunning` 和 `stopRunning`。
 - 验证所有支持的按键名称、大小写归一化、默认值和非法配置拒绝逻辑。
 - 使用独立前台接收器验证主动停止后确实收到 Return `keyCode 36`，并验证异常退出清理时不注入回车。
-- 连续回放四轮真实 AirPods 事件组合：`HearstDoubleTap/Close` 启动与媒体/Siri 两种单击停止路径交替出现；每次启动和媒体停止都必须替换并预热 Siri 宿主，从微信输入法系统日志验证录音启动和停止，并由前台接收器确认两次 Return 已完成发送。
+- 连续回放四轮真实 AirPods 事件组合：`HearstDoubleTap/Close` 启动与媒体/Siri 两种单击停止路径交替出现；每次启动都必须正常 dismiss Siri 并等到 DoAP `AudioDidStop`，从微信输入法系统日志验证录音启动和停止，并由前台接收器确认两次 Return 已完成发送。
 - 验证录音期间单击若被 macOS 路由成 Siri `Close`，仍会和媒体单击一样停止并发送，不会只停止而漏发回车。
 - 在语音键按住期间发送 stop request，验证进程优雅退出前一定补发 key-up。
 
