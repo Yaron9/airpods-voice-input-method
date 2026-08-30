@@ -126,10 +126,13 @@ fi
 
 # Start a downloaded/temporary copy, then start the installed copy directly.
 # The installed copy must take over and close the lower-priority copy.
+installed_app="$HOME/Applications/AirPods Siri Voice Bridge.app"
+ditto "$project_dir/build/AirPods Siri Voice Bridge.app" "$installed_app"
+codesign --verify --strict "$installed_app"
 "$foreign_bridge" >"$result_dir/lower-priority-copy.log" 2>&1 &
 lower_priority_pid=$!
 sleep 0.3
-installed_bridge="$HOME/Applications/AirPods Siri Voice Bridge.app/Contents/MacOS/airpods-siri-voice-bridge"
+installed_bridge="$installed_app/Contents/MacOS/airpods-siri-voice-bridge"
 "$installed_bridge" --voice-key fn >"$result_dir/preferred-copy.log" 2>&1 &
 preferred_pid=$!
 for _ in {1..30}; do
