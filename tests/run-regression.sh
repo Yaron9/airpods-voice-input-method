@@ -27,7 +27,6 @@ cleanup_regression_app() {
 trap cleanup_regression_app EXIT
 cleanup_regression_app
 mkdir -p "$result_dir"
-launchctl remove com.metame.airpods-siri-voice-bridge 2>/dev/null || true
 
 if pgrep -f "$production_pattern" >/dev/null; then
   production_was_running=true
@@ -49,6 +48,7 @@ if pgrep -f "$production_pattern" >/dev/null; then
     exit 1
   fi
 fi
+launchctl remove com.metame.airpods-siri-voice-bridge 2>/dev/null || true
 
 "$project_dir/scripts/build.sh" >/dev/null
 swiftc "$project_dir/tests/select-wetype.swift" -framework Carbon \
