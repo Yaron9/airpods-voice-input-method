@@ -125,11 +125,13 @@ private func scheduleDelayedLaunch(
 
 private enum AccessibilityPermissionRecoveryEvent {
     case startupDenied
+    case openSettings
     case userConfirmedAuthorization
 }
 
 private enum AccessibilityPermissionRecoveryAction: Equatable {
     case showAuthorizationHelp
+    case keepAuthorizationHelpOpen
     case relaunch
     case none
 }
@@ -144,6 +146,9 @@ private struct AccessibilityPermissionRecoveryFlow {
         case .startupDenied:
             startupWasDenied = true
             return .showAuthorizationHelp
+        case .openSettings:
+            guard startupWasDenied else { return .none }
+            return .keepAuthorizationHelpOpen
         case .userConfirmedAuthorization:
             guard startupWasDenied else { return .none }
             return .relaunch
@@ -611,6 +616,7 @@ private func runParserTests() -> Bool {
 private func runPermissionRecoveryTests() -> Bool {
     var flow = AccessibilityPermissionRecoveryFlow()
     guard flow.handle(.startupDenied) == .showAuthorizationHelp,
+          flow.handle(.openSettings) == .keepAuthorizationHelpOpen,
           flow.handle(.userConfirmedAuthorization) == .relaunch else {
         fputs("PERMISSION RECOVERY TEST FAILED\n", stderr)
         return false
@@ -917,19 +923,26 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.addButton(withTitle: "打开辅助功能设置")
         alert.addButton(withTitle: "取消")
         startFailureAlert = alert
-        let response = alert.runModal()
-        if startFailureAlert === alert { startFailureAlert = nil }
-
-        switch response {
-        case .alertFirstButtonReturn:
-            if permissionRecoveryFlow.handle(.userConfirmedAuthorization) == .relaunch {
-                relaunchApplication()
+        authorizationLoop: while true {
+            let response = alert.runModal()
+            switch response {
+            case .alertFirstButtonReturn:
+                if permissionRecoveryFlow.handle(.userConfirmedAuthorization) == .relaunch {
+                    relaunchApplication()
+                }
+                break authorizationLoop
+            case .alertSecondButtonReturn:
+                guard permissionRecoveryFlow.handle(.openSettings) == .keepAuthorizationHelpOpen else {
+                    break authorizationLoop
+                }
+                // Re-enter the modal session first, then put System Settings in front.
+                // The authorization prompt remains ready behind it instead of disappearing.
+                DispatchQueue.main.async { [weak self] in self?.openAccessibilitySettings() }
+            default:
+                break authorizationLoop
             }
-        case .alertSecondButtonReturn:
-            openAccessibilitySettings()
-        default:
-            break
         }
+        if startFailureAlert === alert { startFailureAlert = nil }
     }
 
     private func openAccessibilitySettings() {

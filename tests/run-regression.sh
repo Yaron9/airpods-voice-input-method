@@ -5,17 +5,37 @@ project_dir=${0:A:h:h}
 bridge="$project_dir/build/AirPods Siri Voice Bridge.app/Contents/MacOS/airpods-siri-voice-bridge"
 result_dir=/tmp/airpods-fn-test/regression
 installed_app=${AIRPODS_BRIDGE_TEST_INSTALLED_APP:-"$HOME/Applications/AirPods Siri Voice Bridge Regression.app"}
+production_app="/Applications/AirPods Siri Voice Bridge.app"
+production_executable="$production_app/Contents/MacOS/airpods-siri-voice-bridge"
+production_pattern='^/Applications/AirPods Siri Voice Bridge[.]app/Contents/MacOS/airpods-siri-voice-bridge$'
+production_was_running=false
 if [[ "${installed_app:t}" != "AirPods Siri Voice Bridge Regression.app" ]]; then
   echo "Refusing non-regression app path: $installed_app" >&2
   exit 1
 fi
 cleanup_regression_app() {
   [[ ! -e "$installed_app" ]] || rm -rf -- "$installed_app"
+  if $production_was_running && [[ -x "$production_executable" ]]; then
+    open "$production_app"
+  fi
 }
 trap cleanup_regression_app EXIT
 cleanup_regression_app
 mkdir -p "$result_dir"
 launchctl remove com.metame.airpods-siri-voice-bridge 2>/dev/null || true
+
+if pgrep -f "$production_pattern" >/dev/null; then
+  production_was_running=true
+  print -n > /tmp/airpods-fn-test/stop.request
+  for _ in {1..30}; do
+    pgrep -f "$production_pattern" >/dev/null || break
+    sleep 0.1
+  done
+  if pgrep -f "$production_pattern" >/dev/null; then
+    echo "TEST SETUP FAILED: installed production app did not stop gracefully" >&2
+    exit 1
+  fi
+fi
 
 "$project_dir/scripts/build.sh" >/dev/null
 swiftc "$project_dir/tests/select-wetype.swift" -framework Carbon \
