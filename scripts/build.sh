@@ -3,12 +3,12 @@ set -euo pipefail
 
 project_dir=${0:A:h:h}
 build_dir="$project_dir/build"
-app_dir="$build_dir/AirPods Siri Voice Bridge.app"
+app_dir="$build_dir/AirPods Voice 输入法.app"
 contents_dir="$app_dir/Contents"
 macos_dir="$contents_dir/MacOS"
-executable="$macos_dir/airpods-siri-voice-bridge"
+executable="$macos_dir/airpods-voice-input-method"
 deployment_target=13.0
-sign_identity=${AIRPODS_BRIDGE_SIGN_IDENTITY:--}
+sign_identity=${AIRPODS_VOICE_INPUT_SIGN_IDENTITY:--}
 mkdir -p "$macos_dir"
 
 if [[ "$sign_identity" != "-" ]] \
@@ -21,7 +21,7 @@ architectures=(arm64 x86_64)
 arch_executables=()
 for target_arch in $architectures; do
   object_file="$build_dir/fn-injector-$target_arch.o"
-  arch_executable="$build_dir/airpods-siri-voice-bridge-$target_arch"
+  arch_executable="$build_dir/airpods-voice-input-method-$target_arch"
 
   clang -Wall -Wextra -Werror -Wno-deprecated-declarations \
     -arch "$target_arch" \
@@ -31,7 +31,7 @@ for target_arch in $architectures; do
 
   swiftc \
     -target "${target_arch}-apple-macosx${deployment_target}" \
-    "$project_dir/src/airpods-siri-voice-bridge.swift" \
+    "$project_dir/src/airpods-voice-input-method.swift" \
     "$object_file" \
     -framework AppKit \
     -framework CoreGraphics \
@@ -46,11 +46,11 @@ lipo -create "${arch_executables[@]}" -output "$executable"
 cp "$project_dir/resources/Info.plist" "$contents_dir/Info.plist"
 if [[ "$sign_identity" == "-" ]]; then
   codesign --force --sign - \
-    --identifier com.yaron.airpods-siri-voice-bridge \
+    --identifier com.yaron.airpods-voice-input-method \
     --options runtime --timestamp=none "$app_dir"
 else
   codesign --force --sign "$sign_identity" \
-    --identifier com.yaron.airpods-siri-voice-bridge \
+    --identifier com.yaron.airpods-voice-input-method \
     --options runtime --timestamp "$app_dir"
 fi
 codesign --verify --strict --verbose=2 "$app_dir"

@@ -41,7 +41,7 @@ final class MediaSingleClickProbe {
         }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = [
             MPMediaItemPropertyTitle: "Voice Input Ready",
-            MPMediaItemPropertyArtist: "AirPods Voice Bridge Probe",
+            MPMediaItemPropertyArtist: "AirPods Voice 输入法 Probe",
             MPNowPlayingInfoPropertyIsLiveStream: true,
             MPNowPlayingInfoPropertyPlaybackRate: 1.0,
         ]

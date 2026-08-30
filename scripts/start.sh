@@ -2,14 +2,14 @@
 set -euo pipefail
 
 project_dir=${0:A:h:h}
-runtime_dir=/tmp/airpods-fn-test
-pid_file="$runtime_dir/bridge.pid"
-launch_label=com.metame.airpods-siri-voice-bridge
-installed_app="/Applications/AirPods Siri Voice Bridge.app"
-installed_executable="$installed_app/Contents/MacOS/airpods-siri-voice-bridge"
-voice_key_file=${AIRPODS_BRIDGE_VOICE_KEY_FILE:-"$project_dir/config/voice-key"}
-if [[ -n "${AIRPODS_BRIDGE_VOICE_KEY:-}" ]]; then
-  voice_key=${AIRPODS_BRIDGE_VOICE_KEY:l}
+runtime_dir=/tmp/airpods-voice-input-method
+pid_file="$runtime_dir/app.pid"
+launch_label=com.metame.airpods-voice-input-method
+installed_app="/Applications/AirPods Voice 输入法.app"
+installed_executable="$installed_app/Contents/MacOS/airpods-voice-input-method"
+voice_key_file=${AIRPODS_VOICE_INPUT_KEY_FILE:-"$project_dir/config/voice-key"}
+if [[ -n "${AIRPODS_VOICE_INPUT_KEY:-}" ]]; then
+  voice_key=${AIRPODS_VOICE_INPUT_KEY:l}
 elif [[ -f "$voice_key_file" ]]; then
   voice_key=$(awk 'NF && $1 !~ /^#/ { print tolower($1); exit }' "$voice_key_file")
 else
@@ -31,7 +31,7 @@ launchd_pid=$(launchctl print "gui/$(id -u)/$launch_label" 2>/dev/null \
   | awk '/^[[:space:]]*pid = [0-9]+/ { print $3; exit }' || true)
 if [[ "$launchd_pid" == <-> ]] && kill -0 "$launchd_pid" 2>/dev/null; then
   print -r -- "$launchd_pid" >"$pid_file"
-  echo "Bridge already running (PID $launchd_pid)"
+  echo "AirPods Voice 输入法 already running (PID $launchd_pid)"
   exit 0
 fi
 
@@ -39,8 +39,8 @@ if [[ -f "$pid_file" ]]; then
   running_pid=$(<"$pid_file")
   if [[ "$running_pid" == <-> ]] && kill -0 "$running_pid" 2>/dev/null; then
     executable=$(ps -p "$running_pid" -o comm=)
-    if [[ "${executable:t}" == "airpods-siri-voice-bridge" ]]; then
-      echo "Bridge already running (PID $running_pid)"
+    if [[ "${executable:t}" == "airpods-voice-input-method" ]]; then
+      echo "AirPods Voice 输入法 already running (PID $running_pid)"
       exit 0
     fi
   fi
@@ -53,28 +53,28 @@ if [[ -x "$installed_executable" ]]; then
   app_to_launch="$installed_app"
 else
   "$project_dir/scripts/build.sh" >/dev/null
-  app_to_launch="$project_dir/build/AirPods Siri Voice Bridge.app"
+  app_to_launch="$project_dir/build/AirPods Voice 输入法.app"
 fi
-executable_to_launch="$app_to_launch/Contents/MacOS/airpods-siri-voice-bridge"
+executable_to_launch="$app_to_launch/Contents/MacOS/airpods-voice-input-method"
 codesign --verify --strict --verbose=2 "$app_to_launch"
 "$lsregister" -f "$app_to_launch"
 launchctl remove "$launch_label" 2>/dev/null || true
 launchctl submit -l "$launch_label" \
-  -o "$runtime_dir/bridge.stdout.log" \
-  -e "$runtime_dir/bridge.stderr.log" \
+  -o "$runtime_dir/app.stdout.log" \
+  -e "$runtime_dir/app.stderr.log" \
   -- "$executable_to_launch" --voice-key "$voice_key"
 
-bridge_pid=""
+app_pid=""
 for _ in {1..30}; do
-  bridge_pid=$(launchctl print "gui/$(id -u)/$launch_label" 2>/dev/null \
+  app_pid=$(launchctl print "gui/$(id -u)/$launch_label" 2>/dev/null \
     | awk '/^[[:space:]]*pid = [0-9]+/ { print $3; exit }' || true)
-  [[ "$bridge_pid" == <-> ]] && kill -0 "$bridge_pid" 2>/dev/null && break
+  [[ "$app_pid" == <-> ]] && kill -0 "$app_pid" 2>/dev/null && break
   sleep 0.1
 done
 
-if [[ "$bridge_pid" != <-> ]] || ! kill -0 "$bridge_pid" 2>/dev/null; then
-  echo "Bridge failed to start under launchd; inspect $runtime_dir/bridge.stderr.log" >&2
+if [[ "$app_pid" != <-> ]] || ! kill -0 "$app_pid" 2>/dev/null; then
+  echo "AirPods Voice 输入法 failed to start; inspect $runtime_dir/app.stderr.log" >&2
   exit 1
 fi
-print -r -- "$bridge_pid" >"$pid_file"
-echo "Bridge started (PID $bridge_pid, voice key: $voice_key)"
+print -r -- "$app_pid" >"$pid_file"
+echo "AirPods Voice 输入法 started (PID $app_pid, voice key: $voice_key)"

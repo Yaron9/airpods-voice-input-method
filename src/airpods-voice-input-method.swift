@@ -14,27 +14,19 @@ private func fnInjectorClose()
 @_silgen_name("fn_injector_merge_flags")
 private func fnInjectorMergeFlags(_ current: UInt64, _ down: Int32) -> UInt64
 
-private let airPodsHearstMarker = "SiriNCActionHearstDoubleTap - BluetoothHFP"
-private let airPodsCloseMarker = "SiriNCActionClose - BluetoothHFP"
-private let airPodsInvocationMarkers = [airPodsHearstMarker, airPodsCloseMarker]
 private let weTypeStoppedMarker = "AVCaptureSession_Tundra stopRunning"
-private let doapAudioStoppedMarker = "DoAPSiri AudioDidStop"
-private let logURL = URL(fileURLWithPath: "/tmp/airpods-fn-test/siri-bridge.log")
+private let logURL = URL(fileURLWithPath: "/tmp/airpods-voice-input-method/app.log")
 private let stopRequestURL = URL(fileURLWithPath:
-    ProcessInfo.processInfo.environment["AIRPODS_BRIDGE_STOP_REQUEST_PATH"]
-        ?? "/tmp/airpods-fn-test/stop.request")
-private let siriDismissTimeout: TimeInterval = 2.5
-private let focusReactivationDelay: TimeInterval = 0.05
+    ProcessInfo.processInfo.environment["AIRPODS_VOICE_INPUT_STOP_REQUEST_PATH"]
+        ?? "/tmp/airpods-voice-input-method/stop.request")
 private let finalTextCommitDelay: TimeInterval = 0.50
 private let finalSendDelay: TimeInterval = 0.25
-private let duplicateWindow: TimeInterval = 1.0
 private let singlePressDuplicateWindow: TimeInterval = 0.35
 private let maximumFnHoldDuration: TimeInterval = 60.0
 private let consumerUsagePage: UInt32 = 0x0c
 private let playPauseUsage: UInt32 = 0xcd
 private let bluetoothMediaRemoteSender = "SenderBundleIdentifier = <com.apple.bluetoothd>"
 private let returnKeyCode: UInt16 = 36
-private let escapeKeyCode: UInt16 = 53
 private let logDateFormatter: ISO8601DateFormatter = {
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -120,7 +112,7 @@ private func scheduleDelayedLaunch(
     helper.executableURL = URL(fileURLWithPath: "/bin/sh")
     helper.arguments = [
         "-c", "sleep \"$1\"; exec \"$2\" \"$3\"",
-        "airpods-voice-bridge-relaunch", String(delay), launcherURL.path, targetURL.path,
+        "airpods-voice-input-relaunch", String(delay), launcherURL.path, targetURL.path,
     ]
     helper.standardOutput = FileHandle.nullDevice
     helper.standardError = FileHandle.nullDevice
@@ -184,14 +176,6 @@ private func writeLog(_ message: String) {
     fflush(stdout)
 }
 
-private func isAirPodsSiriInvocation(_ line: String) -> Bool {
-    airPodsInvocationMarkers.contains { line.contains($0) }
-}
-
-private func airPodsEventAlreadyResetsSiriSession(_ line: String) -> Bool {
-    line.contains(airPodsCloseMarker)
-}
-
 private func isPlayPausePress(usagePage: UInt32, usage: UInt32, value: Int) -> Bool {
     usagePage == consumerUsagePage && usage == playPauseUsage && value != 0
 }
@@ -207,32 +191,9 @@ private func mediaRemoteSourceID(_ event: MPRemoteCommandEvent) -> String? {
     return object.value(forKey: "sourceID") as? String
 }
 
-@discardableResult
-private func dismissSiriSession() -> Bool {
-    guard let siri = NSRunningApplication.runningApplications(
-        withBundleIdentifier: "com.apple.Siri").first,
-          let source = CGEventSource(stateID: .hidSystemState),
-          let keyDown = CGEvent(
-              keyboardEventSource: source,
-              virtualKey: CGKeyCode(escapeKeyCode), keyDown: true),
-          let keyUp = CGEvent(
-              keyboardEventSource: source,
-              virtualKey: CGKeyCode(escapeKeyCode), keyDown: false) else {
-        writeLog("Siri Escape failed; Siri host or CGEvent was unavailable")
-        return false
-    }
-    keyDown.flags = []
-    keyUp.flags = []
-    keyDown.postToPid(siri.processIdentifier)
-    keyUp.postToPid(siri.processIdentifier)
-    writeLog("Siri Escape posted; pid=\(siri.processIdentifier)")
-    return true
-}
-
 @MainActor
 private final class AirPodsVoiceController {
     private let voiceKey: VoiceActivationKey
-    private let siriDismissal: () -> Bool
     private(set) var isRunning = false
     private var logProcess: Process?
     private var logPipe: Pipe?
@@ -240,19 +201,15 @@ private final class AirPodsVoiceController {
     private var logWatcherGeneration: UInt64 = 0
     private var pendingLog = ""
     private var busy = false
-    private var awaitingDoAPRelease = false
     private var voiceKeyIsDown = false
-    private var lastInvocation = Date.distantPast
     private var lastSinglePress = Date.distantPast
     private var targetApplication: NSRunningApplication?
-    private var startTimer: Timer?
     private var releaseTimer: Timer?
     private var submitTimer: Timer?
     private var remoteCommandTargets: [(command: MPRemoteCommand, target: Any)] = []
 
-    init(voiceKey: VoiceActivationKey, siriDismissal: @escaping () -> Bool = dismissSiriSession) {
+    init(voiceKey: VoiceActivationKey) {
         self.voiceKey = voiceKey
-        self.siriDismissal = siriDismissal
     }
 
     func start(watchLogs: Bool = true) -> Bool {
@@ -273,11 +230,10 @@ private final class AirPodsVoiceController {
         let nextLogWatcherGeneration = logWatcherGeneration &+ 1
         guard watchLogs else {
             logWatcherGeneration = nextLogWatcherGeneration
-            lastInvocation = .distantPast
             lastSinglePress = .distantPast
             isRunning = true
             activateRemoteStopControls()
-            writeLog("AirPods voice bridge ready in replay mode; voiceKey=\(voiceKey.name)")
+            writeLog("AirPods Voice 输入法 ready in replay mode; voiceKey=\(voiceKey.name)")
             return true
         }
 
@@ -304,11 +260,10 @@ private final class AirPodsVoiceController {
             logProcess = process
             logPipe = pipe
             logWatcherGeneration = nextLogWatcherGeneration
-            lastInvocation = .distantPast
             lastSinglePress = .distantPast
             isRunning = true
             activateRemoteStopControls()
-            writeLog("AirPods voice bridge active; voiceKey=\(voiceKey.name); start/stop=AirPods single press")
+            writeLog("AirPods Voice 输入法 active; voiceKey=\(voiceKey.name); start/stop=AirPods single press")
             return true
         } catch {
             writeLog("Could not start voice-input log watcher: \(error.localizedDescription)")
@@ -320,14 +275,11 @@ private final class AirPodsVoiceController {
         guard isRunning || voiceKeyIsDown else { return }
         isRunning = false
         logWatcherGeneration &+= 1
-        startTimer?.invalidate()
         releaseTimer?.invalidate()
         submitTimer?.invalidate()
-        startTimer = nil
         releaseTimer = nil
         submitTimer = nil
         busy = false
-        awaitingDoAPRelease = false
         targetApplication = nil
         if voiceKeyIsDown {
             _ = postVoiceKey(down: false)
@@ -380,7 +332,7 @@ private final class AirPodsVoiceController {
 
     private func consumeLog(_ text: String, watcherGeneration: UInt64) {
         guard isRunning, watcherGeneration == logWatcherGeneration else {
-            writeLog("Ignored queued Siri log chunk from inactive watcher session")
+            writeLog("Ignored queued input-method log chunk from inactive watcher session")
             return
         }
         pendingLog.append(text)
@@ -389,75 +341,9 @@ private final class AirPodsVoiceController {
         for line in lines.dropLast() { handleLogLine(String(line)) }
     }
 
-    func logWatcherGenerationForTesting() -> UInt64 {
-        logWatcherGeneration
-    }
-
-    func deliverQueuedLogLineForTesting(_ line: String, watcherGeneration: UInt64) {
-        consumeLog(line + "\n", watcherGeneration: watcherGeneration)
-    }
-
     func handleLogLine(_ line: String) {
-        if line.contains(doapAudioStoppedMarker) {
-            guard awaitingDoAPRelease else { return }
-            awaitingDoAPRelease = false
-            startTimer?.invalidate()
-            startTimer = nil
-            writeLog("AirPods DoAP audio stopped; starting voice input")
-            restoreFocusThenBeginFnHold()
-            return
-        }
-        if line.contains(weTypeStoppedMarker) {
-            if voiceKeyIsDown { endVoiceKeyHold(reason: "WeType recording stopped") }
-            return
-        }
-        guard isAirPodsSiriInvocation(line) else { return }
-        guard isRunning else {
-            writeLog("Ignored AirPods Siri invocation while bridge is stopped")
-            return
-        }
-        let now = Date()
-        let timeSinceLastInvocation = now.timeIntervalSince(lastInvocation)
-        if voiceKeyIsDown {
-            if airPodsEventAlreadyResetsSiriSession(line),
-               timeSinceLastInvocation < duplicateWindow {
-                writeLog("Ignored duplicate AirPods Siri invocation")
-                return
-            }
-            lastInvocation = now
-            if airPodsEventAlreadyResetsSiriSession(line) {
-                // BluetoothHFP Close is emitted with DoAP StopStreaming/SiriCancel;
-                // that system event has already returned SiriState to idle.
-                writeLog("AirPods Siri Close received; remote session already reset; stopping and submitting")
-                endVoiceKeyHold(reason: "AirPods single press via Siri", submit: true)
-            } else {
-                _ = siriDismissal()
-                writeLog("Second AirPods long press received; stopping without submitting")
-                endVoiceKeyHold(reason: "second AirPods long press")
-            }
-            return
-        }
-        guard !busy, timeSinceLastInvocation >= duplicateWindow else {
-            writeLog("Ignored duplicate AirPods Siri invocation")
-            return
-        }
-        busy = true
-        lastInvocation = now
-        targetApplication = NSWorkspace.shared.frontmostApplication
-        let targetID = targetApplication?.bundleIdentifier ?? "unknown"
-        let targetPID = targetApplication?.processIdentifier ?? 0
-        writeLog("AirPods Siri invocation received")
-        writeLog("Captured target application; bundle=\(targetID); pid=\(targetPID)")
-        guard siriDismissal() else {
-            writeLog("Voice input start aborted; Siri could not be dismissed normally")
-            targetApplication = nil
-            busy = false
-            return
-        }
-        awaitingDoAPRelease = true
-        startTimer = Timer.scheduledTimer(withTimeInterval: siriDismissTimeout, repeats: false) { [weak self] _ in
-            Task { @MainActor in self?.abortStartWaitingForDoAPRelease() }
-        }
+        guard line.contains(weTypeStoppedMarker) else { return }
+        if voiceKeyIsDown { endVoiceKeyHold(reason: "WeType recording stopped") }
     }
 
     func handleAirPodsSinglePress() {
@@ -517,7 +403,7 @@ private final class AirPodsVoiceController {
         let infoCenter = MPNowPlayingInfoCenter.default()
         infoCenter.nowPlayingInfo = [
             MPMediaItemPropertyTitle: "Voice Input",
-            MPMediaItemPropertyArtist: "AirPods Siri Voice Bridge",
+            MPMediaItemPropertyArtist: "AirPods Voice 输入法",
             MPNowPlayingInfoPropertyIsLiveStream: true,
             MPNowPlayingInfoPropertyPlaybackRate: 1.0,
         ]
@@ -538,27 +424,7 @@ private final class AirPodsVoiceController {
         writeLog("Media remote stop controls inactive")
     }
 
-    private func restoreFocusThenBeginFnHold() {
-        startTimer = nil
-        let currentID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "unknown"
-        let activated = targetApplication?.activate() ?? false
-        writeLog("Target application reactivated; previousFrontmost=\(currentID); success=\(activated)")
-        startTimer = Timer.scheduledTimer(withTimeInterval: focusReactivationDelay, repeats: false) { [weak self] _ in
-            Task { @MainActor in self?.beginVoiceKeyHold() }
-        }
-    }
-
-    private func abortStartWaitingForDoAPRelease() {
-        startTimer = nil
-        guard awaitingDoAPRelease else { return }
-        awaitingDoAPRelease = false
-        targetApplication = nil
-        busy = false
-        writeLog("Voice input start aborted; timed out waiting for AirPods DoAP audio stop")
-    }
-
     private func beginVoiceKeyHold() {
-        startTimer = nil
         guard postVoiceKey(down: true) else {
             busy = false
             return
@@ -667,24 +533,6 @@ private final class AirPodsVoiceController {
 }
 
 private func runParserTests() -> Bool {
-    let cases: [(String, Bool)] = [
-        ("#HotKey: event modifiers 100 type: 10", false),
-        ("SiriNCActionHotkeyActivate - Accessibility", false),
-        ("SiriNCActionHearstDoubleTap - Keyboard", false),
-        ("SiriNCActionClose - Keyboard", false),
-        ("SiriNCActionHearstDoubleTap - BluetoothHFP", true),
-        ("SiriNCActionClose - BluetoothHFP", true),
-        ("prefix SiriNCActionHearstDoubleTap - BluetoothHFP suffix", true),
-    ]
-    for (line, expected) in cases where isAirPodsSiriInvocation(line) != expected {
-        fputs("PARSER TEST FAILED: \(line)\n", stderr)
-        return false
-    }
-    guard airPodsEventAlreadyResetsSiriSession(airPodsCloseMarker),
-          !airPodsEventAlreadyResetsSiriSession(airPodsHearstMarker) else {
-        fputs("SIRI SESSION EVENT TEST FAILED: Close must be the only self-resetting event\n", stderr)
-        return false
-    }
     guard isPlayPausePress(usagePage: 0x0c, usage: 0xcd, value: 1),
           !isPlayPausePress(usagePage: 0x0c, usage: 0xcd, value: 0),
           !isPlayPausePress(usagePage: 0x0c, usage: 0xe9, value: 1),
@@ -702,9 +550,9 @@ private func runParserTests() -> Bool {
     }
     guard VoiceActivationKey.supportedNames.allSatisfy({ VoiceActivationKey.parse($0) != nil }),
           VoiceActivationKey.parse("OPTION")?.name == "option",
-          configuredVoiceKey(arguments: ["bridge"])?.name == "fn",
-          configuredVoiceKey(arguments: ["bridge", "--voice-key", "option"])?.name == "option",
-          configuredVoiceKey(arguments: ["bridge", "--voice-key"]) == nil,
+          configuredVoiceKey(arguments: ["app"])?.name == "fn",
+          configuredVoiceKey(arguments: ["app", "--voice-key", "option"])?.name == "option",
+          configuredVoiceKey(arguments: ["app", "--voice-key"]) == nil,
           VoiceActivationKey.parse("unknown") == nil else {
         fputs("VOICE KEY CONFIG TEST FAILED\n", stderr)
         return false
@@ -728,21 +576,21 @@ private func runParserTests() -> Bool {
         fputs("MODIFIER TEST FAILED: existing modifier flags were not preserved\n", stderr)
         return false
     }
-    guard installationPriority(path: "/Applications/Bridge.app", homeDirectory: "/Users/test") == 2,
-          installationPriority(path: "/Users/test/Applications/Bridge.app", homeDirectory: "/Users/test") == 1,
-          installationPriority(path: "/Users/test/Downloads/Bridge.app", homeDirectory: "/Users/test") == 0,
+    guard installationPriority(path: "/Applications/App.app", homeDirectory: "/Users/test") == 2,
+          installationPriority(path: "/Users/test/Applications/App.app", homeDirectory: "/Users/test") == 1,
+          installationPriority(path: "/Users/test/Downloads/App.app", homeDirectory: "/Users/test") == 0,
           shouldYieldToOtherInstance(
-            ownPath: "/Users/test/Downloads/Bridge.app", ownPID: 200,
-            otherPath: "/Users/test/Applications/Bridge.app", otherPID: 300,
+            ownPath: "/Users/test/Downloads/App.app", ownPID: 200,
+            otherPath: "/Users/test/Applications/App.app", otherPID: 300,
             homeDirectory: "/Users/test"),
           !shouldYieldToOtherInstance(
-            ownPath: "/Users/test/Applications/Bridge.app", ownPID: 300,
-            otherPath: "/Users/test/Downloads/Bridge.app", otherPID: 200,
+            ownPath: "/Users/test/Applications/App.app", ownPID: 300,
+            otherPath: "/Users/test/Downloads/App.app", otherPID: 200,
             homeDirectory: "/Users/test") else {
         fputs("INSTANCE PRIORITY TEST FAILED\n", stderr)
         return false
     }
-    print("PARSER TEST PASSED: only BluetoothHFP AirPods Siri invocation is accepted")
+    print("MEDIA SOURCE TEST PASSED: only bluetoothd remote events are accepted")
     print("CONSUMER CONTROL TEST PASSED: only Play/Pause key-down is accepted")
     print("VOICE KEY CONFIG TEST PASSED: supported names parse and default to fn")
     print("CONFIGURABLE MODIFIER TEST PASSED: existing flags survive key down and up")
@@ -761,7 +609,7 @@ private func runPermissionRecoveryTests() -> Bool {
     }
 
     let markerURL = FileManager.default.temporaryDirectory
-        .appendingPathComponent("airpods-bridge-permission-relaunch-\(UUID().uuidString)")
+        .appendingPathComponent("airpods-voice-input-permission-relaunch-\(UUID().uuidString)")
     defer { try? FileManager.default.removeItem(at: markerURL) }
     do {
         let helper = try scheduleDelayedLaunch(
@@ -796,15 +644,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         let selfTest = CommandLine.arguments.contains("--self-test")
         let returnTest = CommandLine.arguments.contains("--return-test")
-        let cycleTest = CommandLine.arguments.contains("--cycle-test")
-        let siriStopTest = CommandLine.arguments.contains("--siri-stop-test")
-        let longPressStopTest = CommandLine.arguments.contains("--long-press-stop-test")
-        let siriResetFailureTest = CommandLine.arguments.contains("--siri-reset-failure-test")
         let stopStartDuringSubmitTest = CommandLine.arguments.contains(
             "--stop-start-during-submit-test")
         let singleClickCycleTest = CommandLine.arguments.contains("--single-click-cycle-test")
-        let replayTest = selfTest || returnTest || cycleTest || siriStopTest || longPressStopTest
-            || siriResetFailureTest || stopStartDuringSubmitTest || singleClickCycleTest
+        let replayTest = selfTest || returnTest || stopStartDuringSubmitTest
+            || singleClickCycleTest
         if !replayTest, !enforcePreferredInstance() { return }
 
         let stopRequestTimer = Timer(timeInterval: 0.1, repeats: true) { _ in
@@ -823,13 +667,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         self.voiceKey = voiceKey
-        let testDismiss: () -> Bool = replayTest ? {
-            writeLog("Siri Escape posted; pid=0")
-            return true
-        } : dismissSiriSession
-        let controller = AirPodsVoiceController(
-            voiceKey: voiceKey,
-            siriDismissal: siriResetFailureTest ? { false } : testDismiss)
+        let controller = AirPodsVoiceController(voiceKey: voiceKey)
         self.controller = controller
         if !replayTest {
             configureStatusMenu()
@@ -858,12 +696,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSApp.terminate(nil)
             }
         } else if stopStartDuringSubmitTest {
-            let stoppedSessionGeneration = controller.logWatcherGenerationForTesting()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                controller.handleLogLine("STOP-START-1 \(airPodsHearstMarker)")
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) {
-                controller.handleLogLine("STOP-START-1 \(doapAudioStoppedMarker)")
+                controller.handleAirPodsSinglePress()
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
                 controller.handleAirPodsSinglePress()
@@ -871,42 +705,19 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
                 controller.stop()
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) {
-                controller.handleLogLine("STOP-START-STALE \(airPodsHearstMarker)")
-            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
                 _ = controller.start(watchLogs: false)
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.85) {
-                controller.deliverQueuedLogLineForTesting(
-                    "STOP-START-QUEUED \(airPodsHearstMarker)",
-                    watcherGeneration: stoppedSessionGeneration)
-            }
-            // Restart and replay inside duplicateWindow so stale per-session
-            // suppression state cannot hide behind the test timing.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
-                controller.handleLogLine("STOP-START-2 \(airPodsHearstMarker)")
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.02) {
-                controller.handleLogLine("STOP-START-2 \(doapAudioStoppedMarker)")
+                controller.handleAirPodsSinglePress()
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
                 controller.stop()
                 NSApp.terminate(nil)
             }
-        } else if siriResetFailureTest {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                controller.handleLogLine("RESET-FAILURE \(airPodsHearstMarker)")
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-                NSApp.terminate(nil)
-            }
         } else if selfTest {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                controller.handleLogLine("SELF-TEST SiriNCActionHearstDoubleTap - BluetoothHFP")
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) {
-                controller.handleLogLine("SELF-TEST \(doapAudioStoppedMarker)")
+                controller.handleAirPodsSinglePress()
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
                 controller.handleAirPodsSinglePress()
@@ -919,66 +730,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                 controller.testReturnDelivery()
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                NSApp.terminate(nil)
-            }
-        } else if cycleTest {
-            let doapReleaseDelay = 0.15
-            let holdDuration = 4.0
-            let cycleInterval = 5.8
-            let starts = [
-                airPodsHearstMarker, airPodsCloseMarker,
-                airPodsHearstMarker, airPodsCloseMarker,
-            ]
-            for (index, marker) in starts.enumerated() {
-                let cycle = index + 1
-                let start = 0.2 + Double(index) * cycleInterval
-                let stop = start + doapReleaseDelay + focusReactivationDelay + holdDuration
-                DispatchQueue.main.asyncAfter(deadline: .now() + start) {
-                    controller.handleLogLine("CYCLE-\(cycle)-START \(marker)")
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + start + doapReleaseDelay) {
-                    controller.handleLogLine("CYCLE-\(cycle)-DOAP \(doapAudioStoppedMarker)")
-                }
-                if index == 1 {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + start + 0.04) {
-                        controller.handleLogLine("CYCLE-2-DUPLICATE \(airPodsCloseMarker)")
-                    }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + start + 0.75) {
-                        controller.handleLogLine("CYCLE-2-DELAYED-DUPLICATE \(airPodsCloseMarker)")
-                    }
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + stop) {
-                    if index.isMultiple(of: 2) {
-                        controller.handleAirPodsSinglePress()
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                            controller.handleLogLine(
-                                "CYCLE-\(cycle)-EARLY-RESTART \(airPodsHearstMarker)")
-                        }
-                    } else {
-                        controller.handleLogLine("CYCLE-\(cycle)-STOP \(airPodsCloseMarker)")
-                    }
-                }
-            }
-            let finalStop = 0.2 + 3.0 * cycleInterval
-                + doapReleaseDelay + focusReactivationDelay + holdDuration
-            DispatchQueue.main.asyncAfter(deadline: .now() + finalStop + 1.5) {
-                NSApp.terminate(nil)
-            }
-        } else if siriStopTest || longPressStopTest {
-            let start = 0.2
-            let doapRelease = start + 0.15
-            let stop = doapRelease + focusReactivationDelay + duplicateWindow + 0.2
-            DispatchQueue.main.asyncAfter(deadline: .now() + start) {
-                controller.handleLogLine("START SiriNCActionHearstDoubleTap - BluetoothHFP")
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + doapRelease) {
-                controller.handleLogLine("START \(doapAudioStoppedMarker)")
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + stop) {
-                let marker = siriStopTest ? airPodsCloseMarker : airPodsHearstMarker
-                controller.handleLogLine("STOP \(marker)")
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + stop + 1.5) {
                 NSApp.terminate(nil)
             }
         }
@@ -1023,14 +774,14 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         // Keep the item narrow so it is less likely to fall behind a MacBook notch.
         // autosaveName preserves the position after the user Command-drags it.
         let item = NSStatusBar.system.statusItem(withLength: 18)
-        item.autosaveName = "AirPodsVoiceBridgeStatusItem"
+        item.autosaveName = "AirPodsVoiceInputMethodStatusItem"
         item.behavior = [.terminationOnRemoval]
         statusItem = item
-        item.button?.toolTip = "AirPods Voice Bridge"
+        item.button?.toolTip = "AirPods Voice 输入法"
         item.button?.imagePosition = .imageOnly
 
         let menu = NSMenu()
-        let titleItem = NSMenuItem(title: "AirPods Voice Bridge", action: nil, keyEquivalent: "")
+        let titleItem = NSMenuItem(title: "AirPods Voice 输入法", action: nil, keyEquivalent: "")
         titleItem.isEnabled = false
         menu.addItem(titleItem)
 
@@ -1046,7 +797,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
 
         let toggleItem = NSMenuItem(
-            title: "停止", action: #selector(toggleBridge), keyEquivalent: "")
+            title: "停止", action: #selector(toggleVoiceInput), keyEquivalent: "")
         toggleItem.target = self
         self.toggleItem = toggleItem
         menu.addItem(toggleItem)
@@ -1075,7 +826,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem?.button?.image = image
     }
 
-    @objc private func toggleBridge() {
+    @objc private func toggleVoiceInput() {
         guard let controller else { return }
         if controller.isRunning {
             controller.stop()
@@ -1143,11 +894,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         guard startFailureAlert == nil else { return }
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
-        alert.messageText = "无法启动语音桥接"
+        alert.messageText = "无法启动 AirPods Voice 输入法"
         alert.alertStyle = .warning
 
         guard !CGPreflightPostEventAccess() else {
-            alert.informativeText = "辅助功能权限已生效，但桥接器启动失败。请退出 App 后查看日志。"
+            alert.informativeText = "辅助功能权限已生效，但 App 启动失败。请退出 App 后查看日志。"
             alert.addButton(withTitle: "知道了")
             startFailureAlert = alert
             alert.runModal()
@@ -1156,7 +907,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         _ = permissionRecoveryFlow.handle(.startupDenied)
-        alert.informativeText = "请在“系统设置 → 隐私与安全性 → 辅助功能”中允许 AirPods Voice Bridge。已经打开开关时无需重复添加，请点击“已授权，重新启动”，让 macOS 在新进程中刷新权限。"
+        alert.informativeText = "请在“系统设置 → 隐私与安全性 → 辅助功能”中允许 AirPods Voice 输入法。已经打开开关时无需重复添加，请点击“已授权，重新启动”，让 macOS 在新进程中刷新权限。"
         alert.addButton(withTitle: "已授权，重新启动")
         alert.addButton(withTitle: "打开辅助功能设置")
         alert.addButton(withTitle: "取消")

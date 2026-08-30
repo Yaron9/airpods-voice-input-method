@@ -5,21 +5,21 @@
     <key>CFBundleDevelopmentRegion</key>
     <string>zh_CN</string>
     <key>CFBundleDisplayName</key>
-    <string>AirPods Siri Voice Bridge</string>
+    <string>AirPods Voice 输入法</string>
     <key>CFBundleExecutable</key>
-    <string>airpods-siri-voice-bridge</string>
+    <string>airpods-voice-input-method</string>
     <key>CFBundleIdentifier</key>
-    <string>com.yaron.airpods-siri-voice-bridge</string>
+    <string>com.yaron.airpods-voice-input-method</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>AirPods Siri Voice Bridge</string>
+    <string>AirPods Voice 输入法</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-	<string>1.1.0</string>
+    <string>1.0</string>
     <key>CFBundleVersion</key>
-	<string>7</string>
+    <string>1</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
     <key>LSUIElement</key>

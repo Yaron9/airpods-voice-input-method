@@ -12,7 +12,7 @@
     <key>BundleOverwriteAction</key>
     <string>upgrade</string>
     <key>RootRelativeBundlePath</key>
-    <string>AirPods Siri Voice Bridge.app</string>
+    <string>AirPods Voice 输入法.app</string>
   </dict>
 </array>
 </plist>

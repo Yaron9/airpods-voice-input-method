@@ -1,42 +1,43 @@
 #!/bin/zsh
 set -euo pipefail
 
-pid_file=/tmp/airpods-fn-test/bridge.pid
-launch_label=com.metame.airpods-siri-voice-bridge
+runtime_dir=/tmp/airpods-voice-input-method
+pid_file="$runtime_dir/app.pid"
+launch_label=com.metame.airpods-voice-input-method
 launchd_pid=$(launchctl print "gui/$(id -u)/$launch_label" 2>/dev/null \
   | awk '/^[[:space:]]*pid = [0-9]+/ { print $3; exit }' || true)
 
 if [[ "$launchd_pid" == <-> ]]; then
-  bridge_pid=$launchd_pid
+  app_pid=$launchd_pid
 elif [[ -f "$pid_file" ]]; then
-  bridge_pid=$(<"$pid_file")
+  app_pid=$(<"$pid_file")
 else
-  echo "Bridge is not running"
+  echo "AirPods Voice 输入法 is not running"
   exit 0
 fi
-if [[ "$bridge_pid" != <-> ]]; then
-  echo "Invalid bridge PID file: $pid_file" >&2
+if [[ "$app_pid" != <-> ]]; then
+  echo "Invalid app PID file: $pid_file" >&2
   exit 1
 fi
 
-if kill -0 "$bridge_pid" 2>/dev/null; then
-    executable=$(ps -p "$bridge_pid" -o comm=)
-  if [[ "${executable:t}" != "airpods-siri-voice-bridge" ]]; then
-    echo "PID $bridge_pid is not the bridge; refusing to stop it" >&2
+if kill -0 "$app_pid" 2>/dev/null; then
+    executable=$(ps -p "$app_pid" -o comm=)
+  if [[ "${executable:t}" != "airpods-voice-input-method" ]]; then
+    echo "PID $app_pid is not AirPods Voice 输入法; refusing to stop it" >&2
     exit 1
   fi
-  print -n > /tmp/airpods-fn-test/stop.request
+  print -n > "$runtime_dir/stop.request"
   for _ in {1..30}; do
-    kill -0 "$bridge_pid" 2>/dev/null || break
+    kill -0 "$app_pid" 2>/dev/null || break
     sleep 0.1
   done
-  if kill -0 "$bridge_pid" 2>/dev/null; then
-    echo "Bridge did not acknowledge graceful stop; it was left running to avoid a stuck Fn modifier" >&2
+  if kill -0 "$app_pid" 2>/dev/null; then
+    echo "App did not acknowledge graceful stop; it was left running to avoid a stuck Fn modifier" >&2
     exit 1
   fi
-  echo "Bridge stopped gracefully (PID $bridge_pid)"
+  echo "AirPods Voice 输入法 stopped gracefully (PID $app_pid)"
 else
-  echo "Bridge was already stopped"
+  echo "AirPods Voice 输入法 was already stopped"
 fi
 launchctl remove "$launch_label" 2>/dev/null || true
 if [[ -e "$pid_file" ]]; then
