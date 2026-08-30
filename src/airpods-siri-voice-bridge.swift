@@ -275,6 +275,7 @@ private final class AirPodsVoiceController {
     private var logProcess: Process?
     private var logPipe: Pipe?
     private var hidManager: IOHIDManager?
+    private var logWatcherGeneration: UInt64 = 0
     private var pendingLog = ""
     private var busy = false
     private var voiceKeyIsDown = false
@@ -305,7 +306,9 @@ private final class AirPodsVoiceController {
                 return false
             }
         }
+        let nextLogWatcherGeneration = logWatcherGeneration &+ 1
         guard watchLogs else {
+            logWatcherGeneration = nextLogWatcherGeneration
             lastInvocation = .distantPast
             isRunning = true
             writeLog("AirPods voice bridge ready in replay mode; voiceKey=\(voiceKey.name)")
@@ -326,12 +329,15 @@ private final class AirPodsVoiceController {
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
-            Task { @MainActor in self?.consumeLog(text) }
+            Task { @MainActor in
+                self?.consumeLog(text, watcherGeneration: nextLogWatcherGeneration)
+            }
         }
         do {
             try process.run()
             logProcess = process
             logPipe = pipe
+            logWatcherGeneration = nextLogWatcherGeneration
             lastInvocation = .distantPast
             isRunning = true
             writeLog("AirPods voice bridge active; voiceKey=\(voiceKey.name); start=AirPods long press; stop=AirPods single press")
@@ -345,6 +351,7 @@ private final class AirPodsVoiceController {
     func stop() {
         guard isRunning || voiceKeyIsDown else { return }
         isRunning = false
+        logWatcherGeneration &+= 1
         startTimer?.invalidate()
         releaseTimer?.invalidate()
         submitTimer?.invalidate()
@@ -402,11 +409,23 @@ private final class AirPodsVoiceController {
         writeLog("AirPods single-press monitor active; matchedHeadsets=\(deviceCount)")
     }
 
-    private func consumeLog(_ text: String) {
+    private func consumeLog(_ text: String, watcherGeneration: UInt64) {
+        guard isRunning, watcherGeneration == logWatcherGeneration else {
+            writeLog("Ignored queued Siri log chunk from inactive watcher session")
+            return
+        }
         pendingLog.append(text)
         let lines = pendingLog.split(separator: "\n", omittingEmptySubsequences: false)
         pendingLog = String(lines.last ?? "")
         for line in lines.dropLast() { handleLogLine(String(line)) }
+    }
+
+    func logWatcherGenerationForTesting() -> UInt64 {
+        logWatcherGeneration
+    }
+
+    func deliverQueuedLogLineForTesting(_ line: String, watcherGeneration: UInt64) {
+        consumeLog(line + "\n", watcherGeneration: watcherGeneration)
     }
 
     func handleLogLine(_ line: String) {
@@ -827,6 +846,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         updateStatusMenu()
         if stopStartDuringSubmitTest {
+            let stoppedSessionGeneration = controller.logWatcherGenerationForTesting()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                 controller.handleLogLine("STOP-START-1 \(airPodsHearstMarker)")
             }
@@ -841,6 +861,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
                 _ = controller.start(watchLogs: false)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.85) {
+                controller.deliverQueuedLogLineForTesting(
+                    "STOP-START-QUEUED \(airPodsHearstMarker)",
+                    watcherGeneration: stoppedSessionGeneration)
             }
             // Restart and replay inside duplicateWindow so stale per-session
             // suppression state cannot hide behind the test timing.
