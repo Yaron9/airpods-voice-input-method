@@ -36,6 +36,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         window.makeFirstResponder(view)
         window.makeKeyAndOrderFront(nil)
         self.window = window
+        NSApp.activate(ignoringOtherApps: true)
         FileManager.default.createFile(atPath: CommandLine.arguments[2], contents: Data())
     }
 }

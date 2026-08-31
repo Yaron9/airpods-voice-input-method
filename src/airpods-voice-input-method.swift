@@ -445,13 +445,10 @@ private final class AirPodsVoiceController {
         }
         if isSyntheticSafetyProbe {
             writeLog("Keyboard safety probe normalized; fn=\(event.flags.contains(.maskSecondaryFn))")
-            if let directTestTargetPID {
-                event.postToPid(directTestTargetPID)
-            }
         }
         writeLog("Physical keyboard input interrupted voice hold; releasing voice key")
         endVoiceKeyHold(reason: "physical keyboard input")
-        return isSyntheticSafetyProbe
+        return false
     }
 
     private func startFnWatchdog() -> Bool {
