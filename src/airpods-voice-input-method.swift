@@ -310,6 +310,11 @@ private final class AirPodsVoiceController {
             }
         }
         if monitorKeyboard && !startKeyboardRecoveryMonitor() {
+            guard voiceKey.usesFnHID else {
+                writeLog("Keyboard recovery monitor is required for non-Fn modifier safety")
+                fnInjectorClose()
+                return false
+            }
             writeLog("Keyboard recovery monitor unavailable; continuing with Fn watchdog protection")
         }
         let nextLogWatcherGeneration = logWatcherGeneration &+ 1
@@ -440,6 +445,9 @@ private final class AirPodsVoiceController {
         }
         if isSyntheticSafetyProbe {
             writeLog("Keyboard safety probe normalized; fn=\(event.flags.contains(.maskSecondaryFn))")
+            if let directTestTargetPID {
+                event.postToPid(directTestTargetPID)
+            }
         }
         writeLog("Physical keyboard input interrupted voice hold; releasing voice key")
         endVoiceKeyHold(reason: "physical keyboard input")
@@ -561,19 +569,6 @@ private final class AirPodsVoiceController {
 
     func testReturnDelivery() {
         submitVoiceInputIfFocusIsSafe(to: NSWorkspace.shared.frontmostApplication)
-    }
-
-    func runKeyboardSafetyProbe() {
-        guard let source = CGEventSource(stateID: .hidSystemState),
-              let event = CGEvent(
-                keyboardEventSource: source, virtualKey: 49, keyDown: true) else {
-            writeLog("Keyboard safety probe could not create Space event")
-            return
-        }
-        event.flags = [.maskSecondaryFn]
-        event.setIntegerValueField(
-            .eventSourceUserData, value: keyboardSafetySyntheticMarker)
-        _ = handleKeyboardRecoveryEvent(type: .keyDown, event: event)
     }
 
     private func activateRemoteStopControls() {
@@ -1017,11 +1012,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                 controller.handleAirPodsSinglePress()
             }
-            if keyboardSafetyTest {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                    controller.runKeyboardSafetyProbe()
-                }
-            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) {
                 NSApp.terminate(nil)
             }
@@ -1421,6 +1411,22 @@ if CommandLine.arguments.contains("--release-fn") {
 
 if CommandLine.arguments.contains("--fn-is-down") {
     exit(CGEventSource.flagsState(.hidSystemState).contains(.maskSecondaryFn) ? 0 : 1)
+}
+
+if CommandLine.arguments.contains("--post-space") {
+    guard let source = CGEventSource(stateID: .combinedSessionState),
+          let down = CGEvent(keyboardEventSource: source, virtualKey: 49, keyDown: true),
+          let up = CGEvent(keyboardEventSource: source, virtualKey: 49, keyDown: false) else {
+        exit(1)
+    }
+    down.flags = CGEventSource.flagsState(.hidSystemState)
+    down.setIntegerValueField(
+        .eventSourceUserData, value: keyboardSafetySyntheticMarker)
+    up.flags = []
+    down.post(tap: .cghidEventTap)
+    usleep(50_000)
+    up.post(tap: .cghidEventTap)
+    exit(0)
 }
 
 if CommandLine.arguments.contains("--parser-test") {

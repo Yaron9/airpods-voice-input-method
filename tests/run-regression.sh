@@ -42,6 +42,14 @@ echo "APP ICON TEST PASSED: desktop icon is bundled and referenced"
 rg -q 'ready in replay mode' "$result_dir/monitor-fallback.log"
 rg -q 'Keyboard recovery monitor unavailable; continuing with Fn watchdog protection' \
   "$result_dir/monitor-fallback.log"
+"$app" --voice-key option --keyboard-monitor-unavailable-test \
+  >"$result_dir/monitor-required.log" 2>&1
+rg -q 'Keyboard recovery monitor is required for non-Fn modifier safety' \
+  "$result_dir/monitor-required.log"
+if rg -q 'ready in replay mode' "$result_dir/monitor-required.log"; then
+  echo "MONITOR SAFETY FAILED: non-Fn modifier started without keyboard recovery" >&2
+  exit 1
+fi
 "$project_dir/tests/run-e2e.sh"
 "$project_dir/tests/run-keyboard-safety.sh"
 
