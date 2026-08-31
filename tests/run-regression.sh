@@ -38,7 +38,7 @@ rg -q 'launchd_pid=.*launchctl print' "$project_dir/scripts/start.sh" \
   || { echo "BACKGROUND LAUNCH FAILED: running legacy job is not reused" >&2; exit 1; }
 rg -q 'launchd_executable.*installed_executable' "$project_dir/scripts/start.sh" \
   || { echo "BACKGROUND LAUNCH FAILED: stale build-tree job may override installed app" >&2; exit 1; }
-rg -q '/usr/sbin/lsof .* -d txt' "$project_dir/scripts/start.sh" \
+rg -q 'program = ' "$project_dir/scripts/start.sh" \
   || { echo "BACKGROUND LAUNCH FAILED: launchd executable path is ambiguous" >&2; exit 1; }
 rg -q 'current_pattern=.*AirPods Voice 输入法' "$project_dir/resources/package-scripts/preinstall" \
   || { echo "UPGRADE SAFETY FAILED: installer does not stop the current app" >&2; exit 1; }

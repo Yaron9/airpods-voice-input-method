@@ -48,14 +48,17 @@ launchctl remove "$legacy_label" 2>/dev/null || true
 launchd_pid=$(launchctl print "gui/$(id -u)/$launch_label" 2>/dev/null \
   | awk '/^[[:space:]]*pid = [0-9]+/ { print $3; exit }' || true)
 if [[ "$launchd_pid" == <-> ]] && kill -0 "$launchd_pid" 2>/dev/null; then
-  launchd_executable=$(/usr/sbin/lsof -a -p "$launchd_pid" -d txt -Fn 2>/dev/null \
-    | awk 'substr($0, 1, 1) == "n" { print substr($0, 2); exit }' || true)
-  if [[ ! -x "$installed_executable" || -z "$launchd_executable" \
-        || "$launchd_executable" == "$installed_executable" ]]; then
+  launchd_executable=$(launchctl print "gui/$(id -u)/$launch_label" 2>/dev/null \
+    | awk -F' = ' '/^[[:space:]]*program = / { print $2; exit }' || true)
+  if [[ ! -x "$installed_executable" || "$launchd_executable" == "$installed_executable" ]]; then
     print -r -- "$launchd_pid" >"$pid_file"
     print -n >"$show_request"
     echo "AirPods Voice 输入法 already running (PID $launchd_pid)"
     exit 0
+  fi
+  if [[ -z "$launchd_executable" ]]; then
+    echo "Could not verify the old background app path; it was left running safely" >&2
+    exit 1
   fi
   print -n >"$runtime_dir/stop.request"
   for _ in {1..30}; do
