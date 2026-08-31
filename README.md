@@ -118,8 +118,8 @@ App 运行时通过 `MPRemoteCommandCenter` 持有 Now Playing 会话，从媒�
 ## 日志与排查
 
 - 主日志：`/tmp/airpods-voice-input-method/app.log`
-- launchd 标准输出：`/tmp/airpods-voice-input-method/app.stdout.log`
-- launchd 错误输出：`/tmp/airpods-voice-input-method/app.stderr.log`
+- 后台启动标准输出：`/tmp/airpods-voice-input-method/app.stdout.log`
+- 后台启动错误输出：`/tmp/airpods-voice-input-method/app.stderr.log`
 
 确认进程：
 

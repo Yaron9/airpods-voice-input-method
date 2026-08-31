@@ -45,6 +45,14 @@ if [[ "$legacy_pid" == <-> ]]; then
 fi
 launchctl remove "$legacy_label" 2>/dev/null || true
 
+launchd_pid=$(launchctl print "gui/$(id -u)/$launch_label" 2>/dev/null \
+  | awk '/^[[:space:]]*pid = [0-9]+/ { print $3; exit }' || true)
+if [[ "$launchd_pid" == <-> ]] && kill -0 "$launchd_pid" 2>/dev/null; then
+  print -r -- "$launchd_pid" >"$pid_file"
+  print -n >"$show_request"
+  echo "AirPods Voice 输入法 already running (PID $launchd_pid)"
+  exit 0
+fi
 launchctl remove "$launch_label" 2>/dev/null || true
 
 installed_pid=$(pgrep -f "^$installed_executable( |$)" | head -n 1 || true)
@@ -79,17 +87,20 @@ fi
 executable_to_launch="$app_to_launch/Contents/MacOS/airpods-voice-input-method"
 codesign --verify --strict --verbose=2 "$app_to_launch"
 "$lsregister" -f "$app_to_launch"
-/usr/bin/open -g "$app_to_launch" --args --voice-key "$voice_key" --background-launch
+/usr/bin/nohup "$executable_to_launch" --voice-key "$voice_key" --background-launch \
+  >>"$runtime_dir/app.stdout.log" 2>>"$runtime_dir/app.stderr.log" </dev/null &
+launched_pid=$!
 
 app_pid=""
 for _ in {1..30}; do
   app_pid=$(pgrep -f "^$executable_to_launch( |$)" | head -n 1 || true)
+  [[ "$app_pid" == <-> ]] || app_pid=$launched_pid
   [[ "$app_pid" == <-> ]] && kill -0 "$app_pid" 2>/dev/null && break
   sleep 0.1
 done
 
 if [[ "$app_pid" != <-> ]] || ! kill -0 "$app_pid" 2>/dev/null; then
-  echo "AirPods Voice 输入法 failed to start; inspect $runtime_dir/app.stderr.log" >&2
+  echo "AirPods Voice 输入法 failed to start; inspect $runtime_dir/app.log and $runtime_dir/app.stderr.log" >&2
   exit 1
 fi
 print -r -- "$app_pid" >"$pid_file"

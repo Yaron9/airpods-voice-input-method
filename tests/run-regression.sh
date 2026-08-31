@@ -32,8 +32,12 @@ if rg -q 'launchctl submit' "$project_dir/scripts/start.sh"; then
   echo "BACKGROUND LAUNCH FAILED: start.sh still creates a respawning launchctl job" >&2
   exit 1
 fi
-rg -q '/usr/bin/open -g .*--background-launch' "$project_dir/scripts/start.sh" \
+rg -q '/usr/bin/nohup .*--background-launch' "$project_dir/scripts/start.sh" \
   || { echo "BACKGROUND LAUNCH FAILED: start.sh may steal focus" >&2; exit 1; }
+rg -q 'launchd_pid=.*launchctl print' "$project_dir/scripts/start.sh" \
+  || { echo "BACKGROUND LAUNCH FAILED: running legacy job is not reused" >&2; exit 1; }
+rg -q 'current_pattern=.*AirPods Voice 输入法' "$project_dir/resources/package-scripts/preinstall" \
+  || { echo "UPGRADE SAFETY FAILED: installer does not stop the current app" >&2; exit 1; }
 echo "BACKGROUND LAUNCH TEST PASSED: startup cannot respawn or steal focus"
 
 app_icon="$project_dir/build/AirPods Voice 输入法.app/Contents/Resources/AppIcon.icns"

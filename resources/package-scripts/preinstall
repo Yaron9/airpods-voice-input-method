@@ -22,3 +22,21 @@ if [[ "$console_uid" == <-> ]] && (( console_uid > 0 )); then
   launchctl bootout "gui/$console_uid/com.metame.airpods-siri-voice-bridge" 2>/dev/null || true
 fi
 [[ ! -e "$legacy_app" ]] || /bin/rm -R -- "$legacy_app"
+
+current_pattern='^/Applications/AirPods Voice 输入法[.]app/Contents/MacOS/airpods-voice-input-method( |$)'
+current_pid=$(pgrep -f "$current_pattern" | head -n 1 || true)
+if [[ "$current_pid" == <-> ]]; then
+  mkdir -p /tmp/airpods-voice-input-method
+  print -n > /tmp/airpods-voice-input-method/stop.request
+  for _ in {1..50}; do
+    kill -0 "$current_pid" 2>/dev/null || break
+    sleep 0.1
+  done
+  if kill -0 "$current_pid" 2>/dev/null; then
+    print -u2 -- "AirPods Voice 输入法安装失败：请先退出正在运行的 App，再重新安装。"
+    exit 1
+  fi
+fi
+if [[ "$console_uid" == <-> ]] && (( console_uid > 0 )); then
+  launchctl bootout "gui/$console_uid/com.metame.airpods-voice-input-method" 2>/dev/null || true
+fi
