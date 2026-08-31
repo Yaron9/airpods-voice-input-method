@@ -35,7 +35,8 @@ if [[ ! -e "$ready" ]]; then
   exit 1
 fi
 
-"$app" --single-click-cycle-test >"$result_dir/app.log" 2>&1
+AIRPODS_VOICE_INPUT_TEST_TARGET_PID="$receiver_pid" \
+  "$app" --single-click-cycle-test >"$result_dir/app.log" 2>&1
 downs=$(rg -c 'Voice key fn down' "$result_dir/app.log" || true)
 ups=$(rg -c 'Voice key fn up; voice input stopped' "$result_dir/app.log" || true)
 commits=$(rg -c 'Return key posted; stage=commit' "$result_dir/app.log" || true)

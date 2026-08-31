@@ -38,6 +38,10 @@ echo "APP ICON TEST PASSED: desktop icon is bundled and referenced"
 "$app" --permission-recovery-test
 "$app" --status-icon-test
 "$app" --status-visibility-test
+"$app" --keyboard-monitor-unavailable-test >"$result_dir/monitor-fallback.log" 2>&1
+rg -q 'ready in replay mode' "$result_dir/monitor-fallback.log"
+rg -q 'Keyboard recovery monitor unavailable; continuing with Fn watchdog protection' \
+  "$result_dir/monitor-fallback.log"
 "$project_dir/tests/run-e2e.sh"
 "$project_dir/tests/run-keyboard-safety.sh"
 

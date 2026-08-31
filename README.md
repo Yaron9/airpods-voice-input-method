@@ -113,6 +113,8 @@ App 运行时通过 `MPRemoteCommandCenter` 持有 Now Playing 会话，从媒�
 
 为防止全局修饰键影响 Antigravity、Terminal、Todoist 等快捷键敏感应用，1.0 增加了三层保护：启动时清理历史残留 Fn；语音期间一旦检测到实体键盘输入，先移除该事件中的语音修饰键并立即结束语音；App 异常退出时，由独立守护进程释放 Fn。正常停止、切换前台应用、60 秒安全超时或退出 App 时只释放按键，不会误发送。
 
+如果 macOS 临时拒绝建立键盘监听，App 会继续提供 AirPods 语音功能，并保留启动清理、Fn 状态确认、超时释放和崩溃守护；日志会明确记录键盘保险丝处于降级状态，不会因为这项辅助保护不可用而拒绝启动。
+
 ## 日志与排查
 
 - 主日志：`/tmp/airpods-voice-input-method/app.log`
@@ -170,7 +172,7 @@ AIRPODS_VOICE_INPUT_INSTALLER_SIGN_IDENTITY="Developer ID Installer: …" \
 - 非蓝牙媒体事件过滤。
 - 其他可配置语音键。
 - 异常退出时释放语音键且不误发送。
-- 终端收到普通 Space，不携带残留 Fn。
+- Space 事件在进入目标应用前移除残留 Fn。
 - App 被 `kill -9` 后，独立守护进程仍会释放 Fn。
 - 菜单栏隐藏状态不会跨启动保留，重复打开会显示控制窗口。
 - 多副本启动、安装位置优先级和辅助功能权限恢复。

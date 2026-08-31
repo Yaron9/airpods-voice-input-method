@@ -40,8 +40,6 @@ private final class ReturnKeyView: NSView {
 @MainActor
 private final class AppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow?
-    private var readyPath = ""
-    private var activationTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard CommandLine.arguments.count >= 3 else {
@@ -49,7 +47,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         let markerPath = CommandLine.arguments[1]
-        readyPath = CommandLine.arguments[2]
+        let readyPath = CommandLine.arguments[2]
         let expectedCycles = CommandLine.arguments.count > 3
             ? (Int(CommandLine.arguments[3]) ?? 1) : 1
         let view = ReturnKeyView(markerPath: markerPath, expectedCycles: expectedCycles)
@@ -64,31 +62,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         self.window = window
-        signalReadyWhenFrontmost(attemptsRemaining: 30)
-    }
-
-    private func signalReadyWhenFrontmost(attemptsRemaining: Int) {
-        let ownPID = ProcessInfo.processInfo.processIdentifier
-        if NSWorkspace.shared.frontmostApplication?.processIdentifier == ownPID {
-            FileManager.default.createFile(atPath: readyPath, contents: Data())
-            activationTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) {
-                [weak self] _ in
-                Task { @MainActor in
-                    self?.window?.makeKeyAndOrderFront(nil)
-                    NSApp.activate(ignoringOtherApps: true)
-                }
-            }
-            return
-        }
-        guard attemptsRemaining > 0 else {
-            fputs("Receiver could not become frontmost\n", stderr)
-            NSApp.terminate(nil)
-            return
-        }
-        NSApp.activate(ignoringOtherApps: true)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-            self?.signalReadyWhenFrontmost(attemptsRemaining: attemptsRemaining - 1)
-        }
+        FileManager.default.createFile(atPath: readyPath, contents: Data())
     }
 }
 

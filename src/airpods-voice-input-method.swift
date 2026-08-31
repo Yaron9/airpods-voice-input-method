@@ -33,6 +33,7 @@ private let playPauseUsage: UInt32 = 0xcd
 private let bluetoothMediaRemoteSender = "SenderBundleIdentifier = <com.apple.bluetoothd>"
 private let legacyBundleIdentifier = "com.yaron.airpods-siri-voice-bridge"
 private let returnKeyCode: UInt16 = 36
+private let keyboardSafetySyntheticMarker: Int64 = 0x41565053
 private let logDateFormatter: ISO8601DateFormatter = {
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -239,9 +240,10 @@ private func keyboardRecoveryEventCallback(
 ) -> Unmanaged<CGEvent>? {
     guard let userInfo else { return Unmanaged.passUnretained(event) }
     let controller = Unmanaged<AirPodsVoiceController>.fromOpaque(userInfo).takeUnretainedValue()
-    MainActor.assumeIsolated {
+    let suppressEvent = MainActor.assumeIsolated {
         controller.handleKeyboardRecoveryEvent(type: type, event: event)
     }
+    if suppressEvent { return nil }
     return Unmanaged.passUnretained(event)
 }
 
@@ -255,6 +257,7 @@ private func applyStatusItemVisibilityPolicy(_ item: NSStatusItem) {
 @MainActor
 private final class AirPodsVoiceController {
     private let voiceKey: VoiceActivationKey
+    private let directTestTargetPID: pid_t?
     private(set) var isRunning = false
     private var logProcess: Process?
     private var logPipe: Pipe?
@@ -277,6 +280,8 @@ private final class AirPodsVoiceController {
 
     init(voiceKey: VoiceActivationKey) {
         self.voiceKey = voiceKey
+        directTestTargetPID = ProcessInfo.processInfo.environment[
+            "AIRPODS_VOICE_INPUT_TEST_TARGET_PID"].flatMap(pid_t.init)
     }
 
     func start(watchLogs: Bool = true, monitorKeyboard: Bool = true) -> Bool {
@@ -304,10 +309,8 @@ private final class AirPodsVoiceController {
                 writeLog("Cleared stale Fn state during startup")
             }
         }
-        guard !monitorKeyboard || startKeyboardRecoveryMonitor() else {
-            writeLog("Keyboard recovery monitor could not start")
-            fnInjectorClose()
-            return false
+        if monitorKeyboard && !startKeyboardRecoveryMonitor() {
+            writeLog("Keyboard recovery monitor unavailable; continuing with Fn watchdog protection")
         }
         let nextLogWatcherGeneration = logWatcherGeneration &+ 1
         guard watchLogs else {
@@ -387,6 +390,9 @@ private final class AirPodsVoiceController {
 
     private func startKeyboardRecoveryMonitor() -> Bool {
         guard keyboardEventTap == nil else { return true }
+        if CommandLine.arguments.contains("--keyboard-monitor-unavailable-test") {
+            return false
+        }
         let mask = CGEventMask(1) << CGEventType.keyDown.rawValue
         guard let tap = CGEvent.tapCreate(
             tap: .cghidEventTap,
@@ -413,24 +419,31 @@ private final class AirPodsVoiceController {
         keyboardEventTap = nil
     }
 
-    func handleKeyboardRecoveryEvent(type: CGEventType, event: CGEvent) {
+    func handleKeyboardRecoveryEvent(type: CGEventType, event: CGEvent) -> Bool {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let tap = keyboardEventTap { CGEvent.tapEnable(tap: tap, enable: true) }
-            return
+            return false
         }
-        guard type == .keyDown, voiceKeyIsDown else { return }
+        guard type == .keyDown, voiceKeyIsDown else { return false }
         let sourcePID = event.getIntegerValueField(.eventSourceUnixProcessID)
         if CommandLine.arguments.contains("--keyboard-safety-test") {
             writeLog("Keyboard safety test observed keyDown; sourcePID=\(sourcePID)")
         }
-        guard sourcePID != Int64(ProcessInfo.processInfo.processIdentifier) else { return }
+        let isSyntheticSafetyProbe = event.getIntegerValueField(.eventSourceUserData)
+            == keyboardSafetySyntheticMarker
+        guard isSyntheticSafetyProbe
+                || sourcePID != Int64(ProcessInfo.processInfo.processIdentifier) else { return false }
         if voiceKey.usesFnHID {
             event.flags.remove(.maskSecondaryFn)
         } else if let modifierFlag = voiceKey.modifierFlag {
             event.flags.remove(modifierFlag)
         }
+        if isSyntheticSafetyProbe {
+            writeLog("Keyboard safety probe normalized; fn=\(event.flags.contains(.maskSecondaryFn))")
+        }
         writeLog("Physical keyboard input interrupted voice hold; releasing voice key")
         endVoiceKeyHold(reason: "physical keyboard input")
+        return isSyntheticSafetyProbe
     }
 
     private func startFnWatchdog() -> Bool {
@@ -535,7 +548,11 @@ private final class AirPodsVoiceController {
             return
         }
         busy = true
-        targetApplication = NSWorkspace.shared.frontmostApplication
+        if let directTestTargetPID {
+            targetApplication = NSRunningApplication(processIdentifier: directTestTargetPID)
+        } else {
+            targetApplication = NSWorkspace.shared.frontmostApplication
+        }
         let targetID = targetApplication?.bundleIdentifier ?? "unknown"
         let targetPID = targetApplication?.processIdentifier ?? 0
         writeLog("Single-click voice input starting; bundle=\(targetID); pid=\(targetPID)")
@@ -544,6 +561,19 @@ private final class AirPodsVoiceController {
 
     func testReturnDelivery() {
         submitVoiceInputIfFocusIsSafe(to: NSWorkspace.shared.frontmostApplication)
+    }
+
+    func runKeyboardSafetyProbe() {
+        guard let source = CGEventSource(stateID: .hidSystemState),
+              let event = CGEvent(
+                keyboardEventSource: source, virtualKey: 49, keyDown: true) else {
+            writeLog("Keyboard safety probe could not create Space event")
+            return
+        }
+        event.flags = [.maskSecondaryFn]
+        event.setIntegerValueField(
+            .eventSourceUserData, value: keyboardSafetySyntheticMarker)
+        _ = handleKeyboardRecoveryEvent(type: .keyDown, event: event)
     }
 
     private func activateRemoteStopControls() {
@@ -670,7 +700,8 @@ private final class AirPodsVoiceController {
             busy = false
             return
         }
-        guard NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let usesDirectTestDelivery = directTestTargetPID == application.processIdentifier
+        guard usesDirectTestDelivery || NSWorkspace.shared.frontmostApplication?.processIdentifier
                 == application.processIdentifier else {
             guard focusRetriesRemaining > 0 else {
                 writeLog("Return key skipped; original target did not regain focus")
@@ -708,8 +739,13 @@ private final class AirPodsVoiceController {
         }
         keyDown.flags = []
         keyUp.flags = []
-        keyDown.post(tap: .cghidEventTap)
-        keyUp.post(tap: .cghidEventTap)
+        if usesDirectTestDelivery {
+            keyDown.postToPid(application.processIdentifier)
+            keyUp.postToPid(application.processIdentifier)
+        } else {
+            keyDown.post(tap: .cghidEventTap)
+            keyUp.post(tap: .cghidEventTap)
+        }
         if sendStage {
             writeLog("Return key posted; stage=send; voice input submitted")
             busy = false
@@ -922,8 +958,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         let singleClickCycleTest = CommandLine.arguments.contains("--single-click-cycle-test")
         let keyboardSafetyTest = CommandLine.arguments.contains("--keyboard-safety-test")
         let crashWatchdogTest = CommandLine.arguments.contains("--crash-watchdog-test")
+        let keyboardMonitorUnavailableTest = CommandLine.arguments.contains(
+            "--keyboard-monitor-unavailable-test")
         let replayTest = selfTest || returnTest || stopStartDuringSubmitTest
             || singleClickCycleTest || keyboardSafetyTest || crashWatchdogTest
+            || keyboardMonitorUnavailableTest
         if !replayTest {
             guard stopLegacyVersion(), enforcePreferredInstance() else {
                 NSApp.terminate(nil)
@@ -970,9 +1009,18 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         updateStatusMenu()
-        if keyboardSafetyTest || crashWatchdogTest {
+        if keyboardMonitorUnavailableTest {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                NSApp.terminate(nil)
+            }
+        } else if keyboardSafetyTest || crashWatchdogTest {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                 controller.handleAirPodsSinglePress()
+            }
+            if keyboardSafetyTest {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                    controller.runKeyboardSafetyProbe()
+                }
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) {
                 NSApp.terminate(nil)
@@ -1373,20 +1421,6 @@ if CommandLine.arguments.contains("--release-fn") {
 
 if CommandLine.arguments.contains("--fn-is-down") {
     exit(CGEventSource.flagsState(.hidSystemState).contains(.maskSecondaryFn) ? 0 : 1)
-}
-
-if CommandLine.arguments.contains("--post-space") {
-    guard let source = CGEventSource(stateID: .combinedSessionState),
-          let down = CGEvent(keyboardEventSource: source, virtualKey: 49, keyDown: true),
-          let up = CGEvent(keyboardEventSource: source, virtualKey: 49, keyDown: false) else {
-        exit(1)
-    }
-    down.flags = CGEventSource.flagsState(.hidSystemState)
-    up.flags = []
-    down.post(tap: .cghidEventTap)
-    usleep(50_000)
-    up.post(tap: .cghidEventTap)
-    exit(0)
 }
 
 if CommandLine.arguments.contains("--parser-test") {
