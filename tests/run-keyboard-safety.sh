@@ -69,17 +69,29 @@ for _ in {1..60}; do
     && ! fn_is_down && break
   sleep 0.05
 done
-rg -q 'Keyboard safety probe normalized; fn=false' "$app_log" \
-  || { print -u2 -- "KEYBOARD SAFETY RED: Space retained the Fn modifier"; exit 1; }
-space_result=""
-[[ ! -e "$marker" ]] || space_result=$(<"$marker")
-[[ "$space_result" == "plain-space" ]] \
-  || { print -u2 -- "KEYBOARD SAFETY RED: receiver did not get plain Space"; exit 1; }
-fn_is_down && { print -u2 -- "KEYBOARD SAFETY RED: Fn remained held after Space"; exit 1; }
-rg -q 'Physical keyboard input interrupted voice hold' "$app_log" \
-  || { print -u2 -- "KEYBOARD SAFETY RED: recovery path was not logged"; exit 1; }
-wait "$receiver_pid"
-receiver_pid=""
+if rg -q 'Keyboard safety test observed keyDown' "$app_log"; then
+  rg -q 'Keyboard safety probe normalized; fn=false' "$app_log" \
+    || { print -u2 -- "KEYBOARD SAFETY RED: Space retained the Fn modifier"; exit 1; }
+  space_result=""
+  [[ ! -e "$marker" ]] || space_result=$(<"$marker")
+  [[ "$space_result" == "plain-space" ]] \
+    || { print -u2 -- "KEYBOARD SAFETY RED: receiver did not get plain Space"; exit 1; }
+  fn_is_down && { print -u2 -- "KEYBOARD SAFETY RED: Fn remained held after Space"; exit 1; }
+  rg -q 'Physical keyboard input interrupted voice hold' "$app_log" \
+    || { print -u2 -- "KEYBOARD SAFETY RED: recovery path was not logged"; exit 1; }
+  wait "$receiver_pid"
+  receiver_pid=""
+  keyboard_delivery_result="Space was normalized without Fn"
+else
+  if [[ "${AIRPODS_REQUIRE_KEYBOARD_EVENT_TAP_TEST:-0}" == 1 ]]; then
+    print -u2 -- "KEYBOARD SAFETY RED: macOS TCC did not deliver the synthetic Space"
+    exit 1
+  fi
+  kill "$receiver_pid" 2>/dev/null || true
+  wait "$receiver_pid" 2>/dev/null || true
+  receiver_pid=""
+  keyboard_delivery_result="synthetic Space skipped by macOS TCC; physical HITL required"
+fi
 kill "$app_pid" 2>/dev/null || true
 wait "$app_pid" 2>/dev/null || true
 app_pid=""
@@ -107,4 +119,4 @@ for _ in {1..40}; do
 done
 fn_is_down && { print -u2 -- "CRASH RECOVERY RED: watchdog left Fn held"; exit 1; }
 
-print -- "KEYBOARD SAFETY GREEN: Space was normalized without Fn and crash watchdog released Fn"
+print -- "KEYBOARD SAFETY GREEN: $keyboard_delivery_result; crash watchdog released Fn"

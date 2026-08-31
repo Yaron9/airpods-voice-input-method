@@ -223,6 +223,22 @@ private func postCGFnRelease() {
     event.post(tap: .cghidEventTap)
 }
 
+private func postKeyboardSafetySpaceProbe() -> Bool {
+    guard let source = CGEventSource(stateID: .combinedSessionState),
+          let down = CGEvent(keyboardEventSource: source, virtualKey: 49, keyDown: true),
+          let up = CGEvent(keyboardEventSource: source, virtualKey: 49, keyDown: false) else {
+        return false
+    }
+    down.flags = CGEventSource.flagsState(.hidSystemState)
+    down.setIntegerValueField(
+        .eventSourceUserData, value: keyboardSafetySyntheticMarker)
+    up.flags = []
+    down.post(tap: .cghidEventTap)
+    usleep(50_000)
+    up.post(tap: .cghidEventTap)
+    return true
+}
+
 private func runFnWatchdog(cancelURL: URL) -> Int32 {
     var byte: UInt8 = 0
     while true {
@@ -1428,19 +1444,7 @@ if CommandLine.arguments.contains("--fn-is-down") {
 }
 
 if CommandLine.arguments.contains("--post-space") {
-    guard let source = CGEventSource(stateID: .combinedSessionState),
-          let down = CGEvent(keyboardEventSource: source, virtualKey: 49, keyDown: true),
-          let up = CGEvent(keyboardEventSource: source, virtualKey: 49, keyDown: false) else {
-        exit(1)
-    }
-    down.flags = CGEventSource.flagsState(.hidSystemState)
-    down.setIntegerValueField(
-        .eventSourceUserData, value: keyboardSafetySyntheticMarker)
-    up.flags = []
-    down.post(tap: .cghidEventTap)
-    usleep(50_000)
-    up.post(tap: .cghidEventTap)
-    exit(0)
+    exit(postKeyboardSafetySpaceProbe() ? 0 : 1)
 }
 
 if CommandLine.arguments.contains("--parser-test") {
