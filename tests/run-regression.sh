@@ -6,12 +6,20 @@ app="$project_dir/build/AirPods Voice 输入法.app/Contents/MacOS/airpods-voice
 result_dir=/tmp/airpods-voice-input-method/regression
 installed_app=${AIRPODS_VOICE_INPUT_TEST_APP:-"$HOME/Applications/AirPods Voice 输入法 Regression.app"}
 runtime_dir=/tmp/airpods-voice-input-method
+production_pattern='^/Applications/AirPods Voice 输入法[.]app/Contents/MacOS/airpods-voice-input-method( |$)'
+
+production_pid=$(pgrep -f "$production_pattern" | head -n 1 || true)
+if [[ "$production_pid" == <-> ]]; then
+  echo "Refusing to run while the production app is active (PID $production_pid); stop it first" >&2
+  exit 1
+fi
 
 if [[ "${installed_app:t}" != "AirPods Voice 输入法 Regression.app" ]]; then
   echo "Refusing non-regression app path: $installed_app" >&2
   exit 1
 fi
 cleanup() {
+  [[ ! -x "$app" ]] || "$app" --release-fn >/dev/null 2>&1 || true
   [[ ! -e "$installed_app" ]] || /bin/rm -R -- "$installed_app"
 }
 trap cleanup EXIT
@@ -29,7 +37,9 @@ echo "APP ICON TEST PASSED: desktop icon is bundled and referenced"
 "$app" --parser-test
 "$app" --permission-recovery-test
 "$app" --status-icon-test
+"$app" --status-visibility-test
 "$project_dir/tests/run-e2e.sh"
+"$project_dir/tests/run-keyboard-safety.sh"
 
 "$app" --self-test >"$result_dir/self-test.log" 2>&1
 rg -q 'Voice key fn down' "$result_dir/self-test.log"
@@ -85,11 +95,23 @@ foreign_executable="$foreign_app/Contents/MacOS/airpods-voice-input-method"
 foreign_pid=$!
 print -r -- "$foreign_pid" > "$runtime_dir/app.pid"
 sleep 0.3
+show_count_before=$(rg -c 'Control window shown' "$result_dir/foreign.log" || true)
 start_result=$("$project_dir/scripts/start.sh")
 if [[ "$start_result" != "AirPods Voice 输入法 already running (PID $foreign_pid)" ]]; then
   print -n > "$runtime_dir/stop.request"
   wait "$foreign_pid" 2>/dev/null || true
   echo "SINGLETON FAILED: start.sh did not reuse the running app" >&2
+  exit 1
+fi
+for _ in {1..30}; do
+  show_count_after=$(rg -c 'Control window shown' "$result_dir/foreign.log" || true)
+  (( show_count_after > show_count_before )) && break
+  sleep 0.1
+done
+if (( show_count_after <= show_count_before )); then
+  print -n > "$runtime_dir/stop.request"
+  wait "$foreign_pid" 2>/dev/null || true
+  echo "REOPEN FAILED: start.sh did not show the running app control window" >&2
   exit 1
 fi
 "$project_dir/scripts/stop.sh" >/dev/null

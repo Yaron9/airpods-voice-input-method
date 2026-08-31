@@ -4,6 +4,7 @@ set -euo pipefail
 project_dir=${0:A:h:h}
 runtime_dir=/tmp/airpods-voice-input-method
 pid_file="$runtime_dir/app.pid"
+show_request="$runtime_dir/show.request"
 launch_label=com.metame.airpods-voice-input-method
 installed_app="/Applications/AirPods Voice 输入法.app"
 installed_executable="$installed_app/Contents/MacOS/airpods-voice-input-method"
@@ -48,6 +49,7 @@ launchd_pid=$(launchctl print "gui/$(id -u)/$launch_label" 2>/dev/null \
   | awk '/^[[:space:]]*pid = [0-9]+/ { print $3; exit }' || true)
 if [[ "$launchd_pid" == <-> ]] && kill -0 "$launchd_pid" 2>/dev/null; then
   print -r -- "$launchd_pid" >"$pid_file"
+  print -n >"$show_request"
   echo "AirPods Voice 输入法 already running (PID $launchd_pid)"
   exit 0
 fi
@@ -57,6 +59,7 @@ if [[ -f "$pid_file" ]]; then
   if [[ "$running_pid" == <-> ]] && kill -0 "$running_pid" 2>/dev/null; then
     executable=$(ps -p "$running_pid" -o comm=)
     if [[ "${executable:t}" == "airpods-voice-input-method" ]]; then
+      print -n >"$show_request"
       echo "AirPods Voice 输入法 already running (PID $running_pid)"
       exit 0
     fi

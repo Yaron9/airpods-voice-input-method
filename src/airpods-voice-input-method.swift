@@ -19,6 +19,9 @@ private let logURL = URL(fileURLWithPath: "/tmp/airpods-voice-input-method/app.l
 private let stopRequestURL = URL(fileURLWithPath:
     ProcessInfo.processInfo.environment["AIRPODS_VOICE_INPUT_STOP_REQUEST_PATH"]
         ?? "/tmp/airpods-voice-input-method/stop.request")
+private let showRequestURL = URL(fileURLWithPath:
+    ProcessInfo.processInfo.environment["AIRPODS_VOICE_INPUT_SHOW_REQUEST_PATH"]
+        ?? "/tmp/airpods-voice-input-method/show.request")
 private let finalTextCommitDelay: TimeInterval = 0.50
 private let finalSendDelay: TimeInterval = 0.25
 private let focusRecoveryRetryInterval: TimeInterval = 0.10
@@ -199,6 +202,56 @@ private func processIsRunning(_ pid: pid_t) -> Bool {
     return kill(pid, 0) == 0 || errno != ESRCH
 }
 
+private func postCGFnRelease() {
+    guard let source = CGEventSource(stateID: .hidSystemState),
+          let event = CGEvent(keyboardEventSource: source, virtualKey: 63, keyDown: false) else {
+        return
+    }
+    event.type = .flagsChanged
+    var flags = CGEventSource.flagsState(.hidSystemState)
+    flags.remove(.maskSecondaryFn)
+    event.flags = flags
+    event.post(tap: .cghidEventTap)
+}
+
+private func runFnWatchdog(cancelURL: URL) -> Int32 {
+    var byte: UInt8 = 0
+    while true {
+        let result = read(STDIN_FILENO, &byte, 1)
+        if result == 0 { break }
+        if result < 0 && errno != EINTR { break }
+    }
+    guard !FileManager.default.fileExists(atPath: cancelURL.path) else {
+        try? FileManager.default.removeItem(at: cancelURL)
+        return 0
+    }
+    let openResult = fnInjectorOpen()
+    guard openResult == 0 else { return openResult }
+    let releaseResult = fnInjectorPost(0)
+    postCGFnRelease()
+    fnInjectorClose()
+    return releaseResult
+}
+
+private func keyboardRecoveryEventCallback(
+    proxy: CGEventTapProxy, type: CGEventType, event: CGEvent,
+    userInfo: UnsafeMutableRawPointer?
+) -> Unmanaged<CGEvent>? {
+    guard let userInfo else { return Unmanaged.passUnretained(event) }
+    let controller = Unmanaged<AirPodsVoiceController>.fromOpaque(userInfo).takeUnretainedValue()
+    MainActor.assumeIsolated {
+        controller.handleKeyboardRecoveryEvent(type: type, event: event)
+    }
+    return Unmanaged.passUnretained(event)
+}
+
+@MainActor
+private func applyStatusItemVisibilityPolicy(_ item: NSStatusItem) {
+    item.autosaveName = nil
+    item.behavior = []
+    item.isVisible = true
+}
+
 @MainActor
 private final class AirPodsVoiceController {
     private let voiceKey: VoiceActivationKey
@@ -213,14 +266,20 @@ private final class AirPodsVoiceController {
     private var lastSinglePress = Date.distantPast
     private var targetApplication: NSRunningApplication?
     private var releaseTimer: Timer?
+    private var holdIntegrityTimer: Timer?
     private var submitTimer: Timer?
+    private var keyboardEventTap: CFMachPort?
+    private var keyboardEventTapSource: CFRunLoopSource?
+    private var fnWatchdogProcess: Process?
+    private var fnWatchdogCancelURL: URL?
+    private var fnWatchdogPipe: Pipe?
     private var remoteCommandTargets: [(command: MPRemoteCommand, target: Any)] = []
 
     init(voiceKey: VoiceActivationKey) {
         self.voiceKey = voiceKey
     }
 
-    func start(watchLogs: Bool = true) -> Bool {
+    func start(watchLogs: Bool = true, monitorKeyboard: Bool = true) -> Bool {
         guard !isRunning else { return true }
         pendingLog = ""
         guard CGPreflightPostEventAccess() else {
@@ -234,6 +293,21 @@ private final class AirPodsVoiceController {
                 writeLog("IOHIDSystem connection failed: 0x\(String(UInt32(bitPattern: openResult), radix: 16))")
                 return false
             }
+            let currentFlags = CGEventSource.flagsState(.hidSystemState)
+            if currentFlags.contains(.maskSecondaryFn) {
+                guard fnInjectorPost(0) == 0 else {
+                    writeLog("Could not clear stale Fn state during startup")
+                    fnInjectorClose()
+                    return false
+                }
+                postCGFnRelease()
+                writeLog("Cleared stale Fn state during startup")
+            }
+        }
+        guard !monitorKeyboard || startKeyboardRecoveryMonitor() else {
+            writeLog("Keyboard recovery monitor could not start")
+            fnInjectorClose()
+            return false
         }
         let nextLogWatcherGeneration = logWatcherGeneration &+ 1
         guard watchLogs else {
@@ -284,9 +358,12 @@ private final class AirPodsVoiceController {
         isRunning = false
         logWatcherGeneration &+= 1
         releaseTimer?.invalidate()
+        holdIntegrityTimer?.invalidate()
         submitTimer?.invalidate()
         releaseTimer = nil
+        holdIntegrityTimer = nil
         submitTimer = nil
+        stopKeyboardRecoveryMonitor()
         busy = false
         targetApplication = nil
         if voiceKeyIsDown {
@@ -304,7 +381,93 @@ private final class AirPodsVoiceController {
             hidManager = nil
         }
         deactivateRemoteStopControls()
+        cancelFnWatchdog()
         fnInjectorClose()
+    }
+
+    private func startKeyboardRecoveryMonitor() -> Bool {
+        guard keyboardEventTap == nil else { return true }
+        let mask = CGEventMask(1) << CGEventType.keyDown.rawValue
+        guard let tap = CGEvent.tapCreate(
+            tap: .cghidEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: mask,
+            callback: keyboardRecoveryEventCallback,
+            userInfo: Unmanaged.passUnretained(self).toOpaque()) else { return false }
+        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        CGEvent.tapEnable(tap: tap, enable: true)
+        keyboardEventTap = tap
+        keyboardEventTapSource = source
+        writeLog("Physical keyboard recovery monitor active")
+        return true
+    }
+
+    private func stopKeyboardRecoveryMonitor() {
+        if let source = keyboardEventTapSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+        }
+        if let tap = keyboardEventTap { CFMachPortInvalidate(tap) }
+        keyboardEventTapSource = nil
+        keyboardEventTap = nil
+    }
+
+    func handleKeyboardRecoveryEvent(type: CGEventType, event: CGEvent) {
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            if let tap = keyboardEventTap { CGEvent.tapEnable(tap: tap, enable: true) }
+            return
+        }
+        guard type == .keyDown, voiceKeyIsDown else { return }
+        let sourcePID = event.getIntegerValueField(.eventSourceUnixProcessID)
+        if CommandLine.arguments.contains("--keyboard-safety-test") {
+            writeLog("Keyboard safety test observed keyDown; sourcePID=\(sourcePID)")
+        }
+        guard sourcePID != Int64(ProcessInfo.processInfo.processIdentifier) else { return }
+        if voiceKey.usesFnHID {
+            event.flags.remove(.maskSecondaryFn)
+        } else if let modifierFlag = voiceKey.modifierFlag {
+            event.flags.remove(modifierFlag)
+        }
+        writeLog("Physical keyboard input interrupted voice hold; releasing voice key")
+        endVoiceKeyHold(reason: "physical keyboard input")
+    }
+
+    private func startFnWatchdog() -> Bool {
+        guard voiceKey.usesFnHID else { return true }
+        guard fnWatchdogProcess == nil, let executableURL = Bundle.main.executableURL else {
+            return false
+        }
+        let cancelURL = logURL.deletingLastPathComponent()
+            .appendingPathComponent("fn-watchdog-\(UUID().uuidString).cancel")
+        try? FileManager.default.removeItem(at: cancelURL)
+        let process = Process()
+        let lifePipe = Pipe()
+        process.executableURL = executableURL
+        process.arguments = ["--fn-watchdog", cancelURL.path]
+        process.standardInput = lifePipe
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        process.terminationHandler = { _ in try? FileManager.default.removeItem(at: cancelURL) }
+        do {
+            try process.run()
+            fnWatchdogProcess = process
+            fnWatchdogCancelURL = cancelURL
+            fnWatchdogPipe = lifePipe
+            return true
+        } catch {
+            writeLog("Could not start Fn watchdog: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    private func cancelFnWatchdog() {
+        guard let cancelURL = fnWatchdogCancelURL else { return }
+        FileManager.default.createFile(atPath: cancelURL.path, contents: Data())
+        try? fnWatchdogPipe?.fileHandleForWriting.close()
+        fnWatchdogProcess = nil
+        fnWatchdogCancelURL = nil
+        fnWatchdogPipe = nil
     }
 
     private func startConsumerControlMonitor() {
@@ -433,11 +596,24 @@ private final class AirPodsVoiceController {
     }
 
     private func beginVoiceKeyHold() {
+        guard startFnWatchdog() else {
+            writeLog("Voice input refused because Fn watchdog is unavailable")
+            busy = false
+            return
+        }
         guard postVoiceKey(down: true) else {
+            cancelFnWatchdog()
             busy = false
             return
         }
         voiceKeyIsDown = true
+        if voiceKey.usesFnHID {
+            holdIntegrityTimer = Timer.scheduledTimer(
+                withTimeInterval: 0.10, repeats: true
+            ) { [weak self] _ in
+                Task { @MainActor in self?.restoreFnHoldIfNeeded() }
+            }
+        }
         activateRemoteStopControls()
         writeLog("Voice key \(voiceKey.name) down; voice input held until AirPods single press")
         releaseTimer = Timer.scheduledTimer(withTimeInterval: maximumFnHoldDuration, repeats: false) { [weak self] _ in
@@ -447,7 +623,9 @@ private final class AirPodsVoiceController {
 
     private func endVoiceKeyHold(reason: String, submit: Bool = false) {
         releaseTimer?.invalidate()
+        holdIntegrityTimer?.invalidate()
         releaseTimer = nil
+        holdIntegrityTimer = nil
         let submitApplication = targetApplication
         if voiceKeyIsDown {
             _ = postVoiceKey(down: false)
@@ -465,6 +643,20 @@ private final class AirPodsVoiceController {
             Task { @MainActor in
                 self?.submitVoiceInputIfFocusIsSafe(to: submitApplication)
             }
+        }
+    }
+
+    private func restoreFnHoldIfNeeded() {
+        guard voiceKeyIsDown, voiceKey.usesFnHID,
+              !CGEventSource.flagsState(.hidSystemState).contains(.maskSecondaryFn) else {
+            return
+        }
+        let result = fnInjectorPost(1)
+        if result == 0 {
+            writeLog("Fn hold was cleared externally; reasserted while voice input is active")
+        } else {
+            writeLog("Fn hold reassertion failed: 0x\(String(UInt32(bitPattern: result), radix: 16))")
+            endVoiceKeyHold(reason: "Fn hold integrity failure")
         }
     }
 
@@ -535,6 +727,8 @@ private final class AirPodsVoiceController {
     private func postVoiceKey(down: Bool) -> Bool {
         if voiceKey.usesFnHID {
             let result = fnInjectorPost(down ? 1 : 0)
+            if !down { postCGFnRelease() }
+            if !down { cancelFnWatchdog() }
             if result != 0 {
                 writeLog("IOHID Fn \(down ? "down" : "up") failed: 0x\(String(UInt32(bitPattern: result), radix: 16))")
                 return false
@@ -686,6 +880,26 @@ private func runStatusIconTest() -> Bool {
 }
 
 @MainActor
+private func runStatusItemVisibilityTest() -> Bool {
+    let item = NSStatusBar.system.statusItem(withLength: 18)
+    defer { NSStatusBar.system.removeStatusItem(item) }
+    item.isVisible = false
+    item.autosaveName = "AirPodsVoiceInputMethodHiddenTest"
+    item.behavior = [.terminationOnRemoval]
+    applyStatusItemVisibilityPolicy(item)
+    guard item.isVisible, item.autosaveName != "AirPodsVoiceInputMethodHiddenTest",
+          !item.behavior.contains(.terminationOnRemoval) else {
+        let autosaveName = item.autosaveName ?? "nil"
+        fputs(
+            "STATUS VISIBILITY TEST FAILED: visible=\(item.isVisible) autosave=\(autosaveName) behavior=\(item.behavior.rawValue)\n",
+            stderr)
+        return false
+    }
+    print("STATUS VISIBILITY TEST PASSED: status item is forced visible and cannot be removed")
+    return true
+}
+
+@MainActor
 private final class AppDelegate: NSObject, NSApplicationDelegate {
     private var controller: AirPodsVoiceController?
     private var stopRequestTimer: Timer?
@@ -695,6 +909,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private var voiceKey: VoiceActivationKey?
     private var instructionsPopover: NSPopover?
     private var startFailureAlert: NSAlert?
+    private var controlWindow: NSPanel?
+    private var controlStatusLabel: NSTextField?
+    private var controlToggleButton: NSButton?
     private var permissionRecoveryFlow = AccessibilityPermissionRecoveryFlow()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -703,8 +920,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         let stopStartDuringSubmitTest = CommandLine.arguments.contains(
             "--stop-start-during-submit-test")
         let singleClickCycleTest = CommandLine.arguments.contains("--single-click-cycle-test")
+        let keyboardSafetyTest = CommandLine.arguments.contains("--keyboard-safety-test")
+        let crashWatchdogTest = CommandLine.arguments.contains("--crash-watchdog-test")
         let replayTest = selfTest || returnTest || stopStartDuringSubmitTest
-            || singleClickCycleTest
+            || singleClickCycleTest || keyboardSafetyTest || crashWatchdogTest
         if !replayTest {
             guard stopLegacyVersion(), enforcePreferredInstance() else {
                 NSApp.terminate(nil)
@@ -712,11 +931,16 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        let stopRequestTimer = Timer(timeInterval: 0.1, repeats: true) { _ in
-            guard FileManager.default.fileExists(atPath: stopRequestURL.path) else { return }
-            try? FileManager.default.removeItem(at: stopRequestURL)
-            writeLog("Graceful stop requested")
-            NSApp.terminate(nil)
+        let stopRequestTimer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
+            if FileManager.default.fileExists(atPath: showRequestURL.path) {
+                try? FileManager.default.removeItem(at: showRequestURL)
+                Task { @MainActor in self?.showControlWindow() }
+            }
+            if FileManager.default.fileExists(atPath: stopRequestURL.path) {
+                try? FileManager.default.removeItem(at: stopRequestURL)
+                writeLog("Graceful stop requested")
+                NSApp.terminate(nil)
+            }
         }
         self.stopRequestTimer = stopRequestTimer
         RunLoop.main.add(stopRequestTimer, forMode: .common)
@@ -732,8 +956,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         self.controller = controller
         if !replayTest {
             configureStatusMenu()
+            showControlWindow()
         }
-        guard controller.start(watchLogs: !replayTest) else {
+        guard controller.start(
+            watchLogs: !replayTest, monitorKeyboard: !crashWatchdogTest
+        ) else {
             if replayTest {
                 NSApp.terminate(nil)
             } else {
@@ -743,7 +970,14 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         updateStatusMenu()
-        if singleClickCycleTest {
+        if keyboardSafetyTest || crashWatchdogTest {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                controller.handleAirPodsSinglePress()
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) {
+                NSApp.terminate(nil)
+            }
+        } else if singleClickCycleTest {
             for cycle in 0..<4 {
                 let start = 0.2 + Double(cycle) * 2.0
                 DispatchQueue.main.asyncAfter(deadline: .now() + start) {
@@ -801,6 +1035,14 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         controller?.stop()
     }
 
+    func applicationShouldHandleReopen(
+        _ sender: NSApplication, hasVisibleWindows flag: Bool
+    ) -> Bool {
+        writeLog("Application reopened; showing control window")
+        showControlWindow()
+        return true
+    }
+
     private func stopLegacyVersion() -> Bool {
         let legacyApps = NSRunningApplication.runningApplications(
             withBundleIdentifier: legacyBundleIdentifier)
@@ -834,6 +1076,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                 otherPath: otherPath, otherPID: other.processIdentifier)
         }) {
             writeLog("Another preferred app copy is already running; path=\(preferred.bundleURL?.path ?? "unknown")")
+            FileManager.default.createFile(atPath: showRequestURL.path, contents: Data())
             _ = preferred.activate(options: [.activateIgnoringOtherApps])
             NSApp.terminate(nil)
             return false
@@ -852,10 +1095,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func configureStatusMenu() {
         // Keep the item narrow so it is less likely to fall behind a MacBook notch.
-        // autosaveName preserves the position after the user Command-drags it.
         let item = NSStatusBar.system.statusItem(withLength: 18)
-        item.autosaveName = "AirPodsVoiceInputMethodStatusItem"
-        item.behavior = [.terminationOnRemoval]
+        applyStatusItemVisibilityPolicy(item)
         statusItem = item
         item.button?.toolTip = "AirPods Voice 输入法"
         item.button?.imagePosition = .imageOnly
@@ -886,6 +1127,12 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             title: "使用说明…", action: #selector(showInstructions), keyEquivalent: "")
         instructionsItem.target = self
         menu.addItem(instructionsItem)
+
+        let controlItem = NSMenuItem(
+            title: "显示控制窗口…", action: #selector(showControlWindowFromMenu),
+            keyEquivalent: "")
+        controlItem.target = self
+        menu.addItem(controlItem)
         menu.addItem(.separator())
 
         let quitItem = NSMenuItem(
@@ -900,6 +1147,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         let running = controller?.isRunning == true
         statusLineItem?.title = running ? "状态：运行中" : "状态：已停止"
         toggleItem?.title = running ? "停止" : "启动"
+        controlStatusLabel?.stringValue = running ? "状态：运行中" : "状态：已停止"
+        controlToggleButton?.title = running ? "停止" : "启动"
         statusItem?.button?.toolTip = running
             ? "AirPods Voice 输入法：运行中"
             : "AirPods Voice 输入法：已停止"
@@ -920,6 +1169,72 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.async { [weak self] in
             self?.presentInstructions()
         }
+    }
+
+    @objc private func showControlWindowFromMenu() {
+        showControlWindow()
+    }
+
+    private func showControlWindow() {
+        statusItem?.isVisible = true
+        if let window = controlWindow {
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
+            updateStatusMenu()
+            return
+        }
+
+        let title = NSTextField(labelWithString: "AirPods Voice 输入法")
+        title.font = .systemFont(ofSize: 18, weight: .semibold)
+        let status = NSTextField(labelWithString: "状态：正在启动")
+        status.textColor = .secondaryLabelColor
+        controlStatusLabel = status
+
+        let toggle = NSButton(
+            title: "停止", target: self, action: #selector(toggleVoiceInput))
+        toggle.bezelStyle = .rounded
+        controlToggleButton = toggle
+        let instructions = NSButton(
+            title: "使用说明", target: self, action: #selector(showInstructions))
+        instructions.bezelStyle = .rounded
+        let buttons = NSStackView(views: [toggle, instructions])
+        buttons.orientation = .horizontal
+        buttons.spacing = 10
+
+        let hint = NSTextField(
+            wrappingLabelWithString: "再次打开 App 会显示此窗口；菜单栏图标会同时恢复可见。")
+        hint.textColor = .secondaryLabelColor
+        let stack = NSStackView(views: [title, status, buttons, hint])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 12
+        stack.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        let container = NSView()
+        container.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: container.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            container.widthAnchor.constraint(equalToConstant: 360),
+        ])
+
+        let window = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 360, height: 190),
+            styleMask: [.titled, .closable, .utilityWindow],
+            backing: .buffered,
+            defer: false)
+        window.title = "AirPods Voice 输入法"
+        window.isReleasedWhenClosed = false
+        window.contentView = container
+        window.center()
+        controlWindow = window
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        updateStatusMenu()
+        writeLog("Control window shown; statusItemVisible=\(statusItem?.isVisible == true)")
     }
 
     private func presentInstructions() {
@@ -1041,6 +1356,39 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+if let watchdogIndex = CommandLine.arguments.firstIndex(of: "--fn-watchdog") {
+    let cancelIndex = CommandLine.arguments.index(after: watchdogIndex)
+    guard cancelIndex < CommandLine.arguments.endIndex else { exit(64) }
+    exit(runFnWatchdog(cancelURL: URL(fileURLWithPath: CommandLine.arguments[cancelIndex])))
+}
+
+if CommandLine.arguments.contains("--release-fn") {
+    let openResult = fnInjectorOpen()
+    guard openResult == 0 else { exit(openResult) }
+    let releaseResult = fnInjectorPost(0)
+    postCGFnRelease()
+    fnInjectorClose()
+    exit(releaseResult)
+}
+
+if CommandLine.arguments.contains("--fn-is-down") {
+    exit(CGEventSource.flagsState(.hidSystemState).contains(.maskSecondaryFn) ? 0 : 1)
+}
+
+if CommandLine.arguments.contains("--post-space") {
+    guard let source = CGEventSource(stateID: .combinedSessionState),
+          let down = CGEvent(keyboardEventSource: source, virtualKey: 49, keyDown: true),
+          let up = CGEvent(keyboardEventSource: source, virtualKey: 49, keyDown: false) else {
+        exit(1)
+    }
+    down.flags = CGEventSource.flagsState(.hidSystemState)
+    up.flags = []
+    down.post(tap: .cghidEventTap)
+    usleep(50_000)
+    up.post(tap: .cghidEventTap)
+    exit(0)
+}
+
 if CommandLine.arguments.contains("--parser-test") {
     exit(runParserTests() ? 0 : 1)
 }
@@ -1051,6 +1399,15 @@ if CommandLine.arguments.contains("--permission-recovery-test") {
 
 if CommandLine.arguments.contains("--status-icon-test") {
     let passed = MainActor.assumeIsolated { runStatusIconTest() }
+    exit(passed ? 0 : 1)
+}
+
+if CommandLine.arguments.contains("--status-visibility-test") {
+    let passed = MainActor.assumeIsolated {
+        let app = NSApplication.shared
+        app.setActivationPolicy(.accessory)
+        return runStatusItemVisibilityTest()
+    }
     exit(passed ? 0 : 1)
 }
 

@@ -10,7 +10,9 @@ AirPods Voice 输入法是一个原生 macOS 菜单栏 App。单击一次 AirPod
 - 再次单击停止输入，自动确认文字并发送。
 - 支持连续多轮使用，每轮都会恢复到可再次启动的空闲状态。
 - 默认模拟长按 `Fn`，也可配置 Control、Option、Command、Shift 或 F1–F12。
-- 菜单栏提供运行状态、启动、停止、使用说明和退出。
+- 菜单栏和控制窗口均提供运行状态、启动、停止、使用说明和退出。
+- 每次打开 App 都会显示控制窗口；关闭窗口后，App 继续在菜单栏运行。
+- 实体键盘输入会自动中止未结束的语音按键，避免 Fn 等修饰键影响终端或待办软件。
 - 不占用 Dock，不依赖 BetterTouchTool 或其他第三方自动化软件。
 - 支持 Apple Silicon 和 Intel Mac，最低要求 macOS 13。
 
@@ -68,9 +70,10 @@ App 必须获得 macOS“辅助功能”权限，才能模拟长按语音键以�
 - 当前语音快捷键。
 - 启动或停止。
 - 使用说明。
+- 显示控制窗口。
 - 退出。
 
-MacBook 菜单栏图标过多时，图标可能被摄像头刘海遮住。按住 `Command` 拖动图标，可将它移动到刘海右侧；位置会由 macOS 保存。
+MacBook 菜单栏图标过多时，图标仍可能被摄像头刘海遮住。此时重新打开 `/Applications/AirPods Voice 输入法.app`：已运行的实例不会重复启动，而是立即显示控制窗口并恢复菜单栏图标。启动脚本在发现 App 已运行时也会执行同样动作。
 
 Finder、“应用程序”和启动器中显示蓝青色 AirPods 语音波形 App 图标，不再使用 macOS 默认应用图标。
 
@@ -106,7 +109,9 @@ AIRPODS_VOICE_INPUT_KEY=option ./scripts/start.sh
 
 App 运行时通过 `MPRemoteCommandCenter` 持有 Now Playing 会话，从媒体系统接收 AirPods 单击。只接受来源为 macOS 蓝牙服务 `com.apple.bluetoothd` 的媒体事件，Mac 键盘播放键等其他来源不会启动语音。IOHID 监听作为备用通道，同一次实体操作通过 350ms 窗口去重。
 
-第一次单击通过 `IOHIDPostEvent` 按下真实的 Fn modifier；第二次单击释放 Fn，并依次发送两次回车：第一次确认输入法组合文字，第二次发送消息。切换前台应用、60 秒安全超时或退出 App 时只释放按键，不会误发送。
+第一次单击通过 `IOHIDPostEvent` 按下真实的 Fn modifier；第二次单击释放 Fn，并依次发送两次回车：第一次确认输入法组合文字，第二次发送消息。
+
+为防止全局修饰键影响 Antigravity、Terminal、Todoist 等快捷键敏感应用，1.0 增加了三层保护：启动时清理历史残留 Fn；语音期间一旦检测到实体键盘输入，先移除该事件中的语音修饰键并立即结束语音；App 异常退出时，由独立守护进程释放 Fn。正常停止、切换前台应用、60 秒安全超时或退出 App 时只释放按键，不会误发送。
 
 ## 日志与排查
 
@@ -154,6 +159,7 @@ AIRPODS_VOICE_INPUT_INSTALLER_SIGN_IDENTITY="Developer ID Installer: …" \
 ```bash
 ./tests/run-regression.sh
 ./tests/run-e2e.sh
+./tests/run-keyboard-safety.sh
 ```
 
 回归覆盖：
@@ -164,6 +170,9 @@ AIRPODS_VOICE_INPUT_INSTALLER_SIGN_IDENTITY="Developer ID Installer: …" \
 - 非蓝牙媒体事件过滤。
 - 其他可配置语音键。
 - 异常退出时释放语音键且不误发送。
+- 终端收到普通 Space，不携带残留 Fn。
+- App 被 `kill -9` 后，独立守护进程仍会释放 Fn。
+- 菜单栏隐藏状态不会跨启动保留，重复打开会显示控制窗口。
 - 多副本启动、安装位置优先级和辅助功能权限恢复。
 
 实体 AirPods 与微信输入法两轮验收：
@@ -182,6 +191,7 @@ AIRPODS_VOICE_INPUT_INSTALLER_SIGN_IDENTITY="Developer ID Installer: …" \
 - `scripts/start.sh` / `scripts/stop.sh`：开发环境启动与安全停止。
 - `tests/run-regression.sh`：完整回归。
 - `tests/run-e2e.sh`：四轮语音交互回归。
+- `tests/run-keyboard-safety.sh`：终端空格、Fn 残留与崩溃恢复回归。
 - `tests/hitl-two-cycle.sh`：实体 AirPods 两轮验收。
 
 ## 许可与商业使用
