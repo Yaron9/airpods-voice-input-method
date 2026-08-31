@@ -37,7 +37,22 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         window.makeKeyAndOrderFront(nil)
         self.window = window
         NSApp.activate(ignoringOtherApps: true)
-        FileManager.default.createFile(atPath: CommandLine.arguments[2], contents: Data())
+        let readyPath = CommandLine.arguments[2]
+        func markReadyWhenFrontmost(attemptsRemaining: Int) {
+            if NSWorkspace.shared.frontmostApplication?.processIdentifier
+                == ProcessInfo.processInfo.processIdentifier {
+                FileManager.default.createFile(atPath: readyPath, contents: Data())
+                return
+            }
+            guard attemptsRemaining > 0 else {
+                NSApp.terminate(nil)
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                markReadyWhenFrontmost(attemptsRemaining: attemptsRemaining - 1)
+            }
+        }
+        markReadyWhenFrontmost(attemptsRemaining: 40)
     }
 }
 

@@ -30,7 +30,10 @@ private let singlePressDuplicateWindow: TimeInterval = 0.35
 private let maximumFnHoldDuration: TimeInterval = 60.0
 private let consumerUsagePage: UInt32 = 0x0c
 private let playPauseUsage: UInt32 = 0xcd
-private let bluetoothMediaRemoteSender = "SenderBundleIdentifier = <com.apple.bluetoothd>"
+private let bluetoothMediaRemoteSenders = [
+    "SenderBundleIdentifier = <com.apple.bluetoothd>",
+    "SenderBundleIdentifier = <com.apple.cloudpaird>",
+]
 private let legacyBundleIdentifier = "com.yaron.airpods-siri-voice-bridge"
 private let returnKeyCode: UInt16 = 36
 private let keyboardSafetySyntheticMarker: Int64 = 0x41565053
@@ -196,7 +199,8 @@ private func isPlayPausePress(usagePage: UInt32, usage: UInt32, value: Int) -> B
 }
 
 private func isBluetoothMediaRemoteSource(_ sourceID: String?) -> Bool {
-    sourceID?.contains(bluetoothMediaRemoteSender) == true
+    guard let sourceID else { return false }
+    return bluetoothMediaRemoteSenders.contains { sourceID.contains($0) }
 }
 
 private func mediaRemoteSourceID(_ event: MPRemoteCommandEvent) -> String? {
@@ -818,11 +822,13 @@ private func runParserTests() -> Bool {
         return false
     }
     let bluetoothSource = "SenderDevice = <Mac>, SenderBundleIdentifier = <com.apple.bluetoothd>, SenderPID = <442>"
+    let cloudPairingSource = "SenderDevice = <Mac>, SenderBundleIdentifier = <com.apple.cloudpaird>, SenderPID = <727>"
     let keyboardSource = "SenderDevice = <Mac>, SenderBundleIdentifier = <com.apple.rcd>, SenderPID = <18882>"
     guard isBluetoothMediaRemoteSource(bluetoothSource),
+          isBluetoothMediaRemoteSource(cloudPairingSource),
           !isBluetoothMediaRemoteSource(keyboardSource),
           !isBluetoothMediaRemoteSource(nil) else {
-        fputs("MEDIA REMOTE SOURCE TEST FAILED: only bluetoothd may trigger voice input\n", stderr)
+        fputs("MEDIA REMOTE SOURCE TEST FAILED: only AirPods services may trigger voice input\n", stderr)
         return false
     }
     guard VoiceActivationKey.supportedNames.allSatisfy({ VoiceActivationKey.parse($0) != nil }),
@@ -869,7 +875,7 @@ private func runParserTests() -> Bool {
         fputs("INSTANCE PRIORITY TEST FAILED\n", stderr)
         return false
     }
-    print("MEDIA SOURCE TEST PASSED: only bluetoothd remote events are accepted")
+    print("MEDIA SOURCE TEST PASSED: only AirPods remote services are accepted")
     print("CONSUMER CONTROL TEST PASSED: only Play/Pause key-down is accepted")
     print("VOICE KEY CONFIG TEST PASSED: supported names parse and default to fn")
     print("CONFIGURABLE MODIFIER TEST PASSED: existing flags survive key down and up")

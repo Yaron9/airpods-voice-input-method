@@ -107,7 +107,7 @@ AIRPODS_VOICE_INPUT_KEY=option ./scripts/start.sh
 
 ## 工作原理
 
-App 运行时通过 `MPRemoteCommandCenter` 持有 Now Playing 会话，从媒体系统接收 AirPods 单击。只接受来源为 macOS 蓝牙服务 `com.apple.bluetoothd` 的媒体事件，Mac 键盘播放键等其他来源不会启动语音。IOHID 监听作为备用通道，同一次实体操作通过 350ms 窗口去重。
+App 运行时通过 `MPRemoteCommandCenter` 持有 Now Playing 会话，从媒体系统接收 AirPods 单击。只接受来源为 macOS AirPods 蓝牙服务 `com.apple.bluetoothd` 或 `com.apple.cloudpaird` 的媒体事件，Mac 键盘播放键等其他来源不会启动语音。IOHID 监听作为备用通道，同一次实体操作通过 350ms 窗口去重。
 
 第一次单击通过 `IOHIDPostEvent` 按下真实的 Fn modifier；第二次单击释放 Fn，并依次发送两次回车：第一次确认输入法组合文字，第二次发送消息。
 
