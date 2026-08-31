@@ -28,6 +28,14 @@ mkdir -p "$result_dir" "$runtime_dir"
 
 "$project_dir/scripts/build.sh" >/dev/null
 
+if rg -q 'launchctl submit' "$project_dir/scripts/start.sh"; then
+  echo "BACKGROUND LAUNCH FAILED: start.sh still creates a respawning launchctl job" >&2
+  exit 1
+fi
+rg -q '/usr/bin/open -g .*--background-launch' "$project_dir/scripts/start.sh" \
+  || { echo "BACKGROUND LAUNCH FAILED: start.sh may steal focus" >&2; exit 1; }
+echo "BACKGROUND LAUNCH TEST PASSED: startup cannot respawn or steal focus"
+
 app_icon="$project_dir/build/AirPods Voice 输入法.app/Contents/Resources/AppIcon.icns"
 [[ -f "$app_icon" ]] || { echo "APP ICON TEST FAILED: AppIcon.icns is missing" >&2; exit 1; }
 [[ "$(plutil -extract CFBundleIconFile raw "$project_dir/build/AirPods Voice 输入法.app/Contents/Info.plist")" == "AppIcon" ]] \

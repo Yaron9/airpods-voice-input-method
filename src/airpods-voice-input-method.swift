@@ -109,17 +109,25 @@ private func shouldYieldToOtherInstance(
     return otherPriority > ownPriority || (otherPriority == ownPriority && otherPID < ownPID)
 }
 
+private func shouldShowControlWindowAtLaunch(arguments: [String]) -> Bool {
+    !arguments.contains("--background-launch")
+}
+
 @discardableResult
 private func scheduleDelayedLaunch(
     targetURL: URL,
     launcherURL: URL = URL(fileURLWithPath: "/usr/bin/open"),
-    delay: TimeInterval = 0.5
+    delay: TimeInterval = 0.5,
+    launchInBackground: Bool = false
 ) throws -> Process {
     let helper = Process()
     helper.executableURL = URL(fileURLWithPath: "/bin/sh")
+    let command = launchInBackground
+        ? "sleep \"$1\"; exec \"$2\" -g \"$3\" --args --background-launch"
+        : "sleep \"$1\"; exec \"$2\" \"$3\""
     helper.arguments = [
-        "-c", "sleep \"$1\"; exec \"$2\" \"$3\"",
-        "airpods-voice-input-relaunch", String(delay), launcherURL.path, targetURL.path,
+        "-c", command, "airpods-voice-input-relaunch", String(delay),
+        launcherURL.path, targetURL.path,
     ]
     helper.standardOutput = FileHandle.nullDevice
     helper.standardError = FileHandle.nullDevice
@@ -839,7 +847,9 @@ private func runParserTests() -> Bool {
           !shouldYieldToOtherInstance(
             ownPath: "/Users/test/Applications/App.app", ownPID: 300,
             otherPath: "/Users/test/Downloads/App.app", otherPID: 200,
-            homeDirectory: "/Users/test") else {
+            homeDirectory: "/Users/test"),
+          shouldShowControlWindowAtLaunch(arguments: ["app"]),
+          !shouldShowControlWindowAtLaunch(arguments: ["app", "--background-launch"]) else {
         fputs("INSTANCE PRIORITY TEST FAILED\n", stderr)
         return false
     }
@@ -987,7 +997,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         self.controller = controller
         if !replayTest {
             configureStatusMenu()
-            showControlWindow()
+            if shouldShowControlWindowAtLaunch(arguments: CommandLine.arguments) {
+                showControlWindow()
+            } else {
+                writeLog("Background launch; control window remains closed and focus is preserved")
+            }
         }
         guard controller.start(
             watchLogs: !replayTest, monitorKeyboard: !crashWatchdogTest
@@ -1111,8 +1125,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                 otherPath: otherPath, otherPID: other.processIdentifier)
         }) {
             writeLog("Another preferred app copy is already running; path=\(preferred.bundleURL?.path ?? "unknown")")
-            FileManager.default.createFile(atPath: showRequestURL.path, contents: Data())
-            _ = preferred.activate(options: [.activateIgnoringOtherApps])
+            if !CommandLine.arguments.contains("--background-launch") {
+                FileManager.default.createFile(atPath: showRequestURL.path, contents: Data())
+                _ = preferred.activate(options: [.activateIgnoringOtherApps])
+            }
             NSApp.terminate(nil)
             return false
         }
@@ -1216,6 +1232,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.activate(ignoringOtherApps: true)
             window.makeKeyAndOrderFront(nil)
             updateStatusMenu()
+            writeLog("Control window shown; statusItemVisible=\(statusItem?.isVisible == true)")
             return
         }
 
@@ -1378,7 +1395,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         do {
-            try scheduleDelayedLaunch(targetURL: appURL)
+            try scheduleDelayedLaunch(targetURL: appURL, launchInBackground: true)
             writeLog("Accessibility authorization confirmed; relaunching app to refresh permission state")
             NSApp.terminate(nil)
         } catch {
