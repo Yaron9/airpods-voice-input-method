@@ -67,6 +67,7 @@ if rg -q 'ready in replay mode' "$result_dir/monitor-required.log"; then
   exit 1
 fi
 "$project_dir/tests/run-e2e.sh"
+"$project_dir/tests/run-fn-consumption.sh"
 "$project_dir/tests/run-keyboard-safety.sh"
 
 "$app" --self-test >"$result_dir/self-test.log" 2>&1

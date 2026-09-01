@@ -297,7 +297,6 @@ private final class AirPodsVoiceController {
     private var lastSinglePress = Date.distantPast
     private var targetApplication: NSRunningApplication?
     private var releaseTimer: Timer?
-    private var holdIntegrityTimer: Timer?
     private var submitTimer: Timer?
     private var keyboardEventTap: CFMachPort?
     private var keyboardEventTapSource: CFRunLoopSource?
@@ -394,10 +393,8 @@ private final class AirPodsVoiceController {
         isRunning = false
         logWatcherGeneration &+= 1
         releaseTimer?.invalidate()
-        holdIntegrityTimer?.invalidate()
         submitTimer?.invalidate()
         releaseTimer = nil
-        holdIntegrityTimer = nil
         submitTimer = nil
         stopKeyboardRecoveryMonitor()
         busy = false
@@ -657,13 +654,6 @@ private final class AirPodsVoiceController {
             return
         }
         voiceKeyIsDown = true
-        if voiceKey.usesFnHID {
-            holdIntegrityTimer = Timer.scheduledTimer(
-                withTimeInterval: 0.10, repeats: true
-            ) { [weak self] _ in
-                Task { @MainActor in self?.restoreFnHoldIfNeeded() }
-            }
-        }
         activateRemoteStopControls()
         writeLog("Voice key \(voiceKey.name) down; voice input held until AirPods single press")
         releaseTimer = Timer.scheduledTimer(withTimeInterval: maximumFnHoldDuration, repeats: false) { [weak self] _ in
@@ -673,9 +663,7 @@ private final class AirPodsVoiceController {
 
     private func endVoiceKeyHold(reason: String, submit: Bool = false) {
         releaseTimer?.invalidate()
-        holdIntegrityTimer?.invalidate()
         releaseTimer = nil
-        holdIntegrityTimer = nil
         let submitApplication = targetApplication
         if voiceKeyIsDown {
             _ = postVoiceKey(down: false)
@@ -693,20 +681,6 @@ private final class AirPodsVoiceController {
             Task { @MainActor in
                 self?.submitVoiceInputIfFocusIsSafe(to: submitApplication)
             }
-        }
-    }
-
-    private func restoreFnHoldIfNeeded() {
-        guard voiceKeyIsDown, voiceKey.usesFnHID,
-              !CGEventSource.flagsState(.hidSystemState).contains(.maskSecondaryFn) else {
-            return
-        }
-        let result = fnInjectorPost(1)
-        if result == 0 {
-            writeLog("Fn hold was cleared externally; reasserted while voice input is active")
-        } else {
-            writeLog("Fn hold reassertion failed: 0x\(String(UInt32(bitPattern: result), radix: 16))")
-            endVoiceKeyHold(reason: "Fn hold integrity failure")
         }
     }
 

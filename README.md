@@ -109,7 +109,7 @@ AIRPODS_VOICE_INPUT_KEY=option ./scripts/start.sh
 
 App 运行时通过 `MPRemoteCommandCenter` 持有 Now Playing 会话，从媒体系统接收 AirPods 单击。只接受来源为 macOS AirPods 蓝牙服务 `com.apple.bluetoothd` 或 `com.apple.cloudpaird` 的媒体事件，Mac 键盘播放键等其他来源不会启动语音。IOHID 监听作为备用通道，同一次实体操作通过 350ms 窗口去重。
 
-第一次单击通过 `IOHIDPostEvent` 按下真实的 Fn modifier；第二次单击释放 Fn，并依次发送两次回车：第一次确认输入法组合文字，第二次发送消息。
+第一次单击通过 `IOHIDPostEvent` 发送一次 Fn 激活；输入法消费该事件后，App 不会反复重按 Fn。第二次单击结束逻辑录音会话，并依次发送两次回车：第一次确认输入法组合文字，第二次发送消息。
 
 为防止全局修饰键影响 Antigravity、Terminal、Todoist 等快捷键敏感应用，1.0 增加了三层保护：启动时清理历史残留 Fn；语音期间一旦检测到实体键盘输入，先移除该事件中的语音修饰键并立即结束语音；App 异常退出时，由独立守护进程释放 Fn。正常停止、切换前台应用、60 秒安全超时或退出 App 时只释放按键，不会误发送。
 
@@ -161,6 +161,7 @@ AIRPODS_VOICE_INPUT_INSTALLER_SIGN_IDENTITY="Developer ID Installer: …" \
 ```bash
 ./tests/run-regression.sh
 ./tests/run-e2e.sh
+./tests/run-fn-consumption.sh
 ./tests/run-keyboard-safety.sh
 ```
 
@@ -168,6 +169,7 @@ AIRPODS_VOICE_INPUT_INSTALLER_SIGN_IDENTITY="Developer ID Installer: …" \
 
 - 四轮“单击开始、单击停止并发送”。
 - Fn 的真实按下、释放以及四轮发送状态机。
+- 输入法消费 Fn 后不会触发每 100ms 重按，避免终端只写入剪贴板而不落字。
 - 两次回车的确认与发送。
 - 非蓝牙媒体事件过滤。
 - 其他可配置语音键。
@@ -193,6 +195,7 @@ AIRPODS_VOICE_INPUT_INSTALLER_SIGN_IDENTITY="Developer ID Installer: …" \
 - `scripts/start.sh` / `scripts/stop.sh`：开发环境启动与安全停止。
 - `tests/run-regression.sh`：完整回归。
 - `tests/run-e2e.sh`：四轮语音交互回归。
+- `tests/run-fn-consumption.sh`：输入法消费 Fn 后不重复注入的终端兼容性回归。
 - `tests/run-keyboard-safety.sh`：终端空格、Fn 残留与崩溃恢复回归。
 - `tests/hitl-two-cycle.sh`：实体 AirPods 两轮验收。
 

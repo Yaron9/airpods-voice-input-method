@@ -65,7 +65,7 @@ run_round() {
 
   print -- "ROUND $round READY: 请单击一次 AirPods 开始说话。"
   wait_for_app_count 'Bluetooth media remote command received' "$((bluetooth_before + 1))" \
-    "$human_timeout_tenths" "第 $round 轮没有收到 bluetoothd 单击"
+    "$human_timeout_tenths" "第 $round 轮没有收到 AirPods 蓝牙服务单击"
   wait_for_app_count 'Voice key fn down' "$((down_before + 1))" 25 \
     "第 $round 轮收到 AirPods 单击，但 2.5 秒内没有按下 Fn"
 
@@ -86,4 +86,4 @@ run_round 2
 cleanup
 trap - EXIT
 
-print -- "HITL PASSED: 两轮均由 bluetoothd 单击启动、停止并发送。"
+print -- "HITL PASSED: 两轮均由 AirPods 蓝牙服务单击启动、停止并发送。"
