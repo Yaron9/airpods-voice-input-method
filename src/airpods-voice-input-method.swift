@@ -27,7 +27,7 @@ private let finalSendDelay: TimeInterval = 0.25
 private let focusRecoveryRetryInterval: TimeInterval = 0.10
 private let maximumFocusRecoveryRetries = 10
 private let singlePressDuplicateWindow: TimeInterval = 0.35
-private let maximumFnHoldDuration: TimeInterval = 60.0
+private let maximumFnHoldDuration: TimeInterval = 5 * 60
 private let consumerUsagePage: UInt32 = 0x0c
 private let playPauseUsage: UInt32 = 0xcd
 private let bluetoothMediaRemoteSenders = [
@@ -657,7 +657,7 @@ private final class AirPodsVoiceController {
         activateRemoteStopControls()
         writeLog("Voice key \(voiceKey.name) down; voice input held until AirPods single press")
         releaseTimer = Timer.scheduledTimer(withTimeInterval: maximumFnHoldDuration, repeats: false) { [weak self] _ in
-            Task { @MainActor in self?.endVoiceKeyHold(reason: "60-second safety timeout") }
+            Task { @MainActor in self?.endVoiceKeyHold(reason: "5-minute safety timeout") }
         }
     }
 
@@ -788,6 +788,10 @@ private final class AirPodsVoiceController {
 }
 
 private func runParserTests() -> Bool {
+    guard maximumFnHoldDuration == 300 else {
+        fputs("VOICE TIMEOUT TEST FAILED: expected a five-minute safety limit\n", stderr)
+        return false
+    }
     guard isPlayPausePress(usagePage: 0x0c, usage: 0xcd, value: 1),
           !isPlayPausePress(usagePage: 0x0c, usage: 0xcd, value: 0),
           !isPlayPausePress(usagePage: 0x0c, usage: 0xe9, value: 1),
@@ -849,6 +853,7 @@ private func runParserTests() -> Bool {
         fputs("INSTANCE PRIORITY TEST FAILED\n", stderr)
         return false
     }
+    print("VOICE TIMEOUT TEST PASSED: safety limit is five minutes")
     print("MEDIA SOURCE TEST PASSED: only AirPods remote services are accepted")
     print("CONSUMER CONTROL TEST PASSED: only Play/Pause key-down is accepted")
     print("VOICE KEY CONFIG TEST PASSED: supported names parse and default to fn")

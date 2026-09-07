@@ -5,11 +5,13 @@ project_dir=${0:A:h:h}
 result_dir=/tmp/airpods-voice-input-method/keyboard-safety
 app="$project_dir/build/AirPods Voice 输入法.app/Contents/MacOS/airpods-voice-input-method"
 receiver="$result_dir/keyboard-safety-receiver"
+input_source_control="$result_dir/input-source-control"
 marker="$result_dir/space.log"
 ready="$result_dir/receiver.ready"
 app_log="$result_dir/app.log"
 receiver_pid=""
 app_pid=""
+original_input_source=""
 
 fn_is_down() {
   "$app" --fn-is-down
@@ -30,6 +32,9 @@ cleanup() {
     wait "$receiver_pid" 2>/dev/null || true
   fi
   release_fn
+  if [[ -n "$original_input_source" && -x "$input_source_control" ]]; then
+    "$input_source_control" select "$original_input_source" >/dev/null 2>&1 || true
+  fi
 }
 trap cleanup EXIT
 
@@ -39,6 +44,10 @@ release_fn
 [[ ! -e "$ready" ]] || unlink "$ready"
 "$project_dir/scripts/build.sh" >/dev/null
 swiftc "$project_dir/tests/keyboard-safety-receiver.swift" -framework AppKit -o "$receiver"
+swiftc "$project_dir/tests/input-source-control.swift" -framework Carbon \
+  -o "$input_source_control"
+original_input_source=$("$input_source_control" current)
+"$input_source_control" select com.apple.keylayout.ABC
 
 "$receiver" "$marker" "$ready" >"$result_dir/receiver.log" 2>&1 &
 receiver_pid=$!
@@ -97,6 +106,7 @@ wait "$app_pid" 2>/dev/null || true
 app_pid=""
 release_fn
 
+"$input_source_control" select com.apple.keylayout.ABC
 "$app" --crash-watchdog-test >"$result_dir/crash.log" 2>&1 &
 app_pid=$!
 for _ in {1..50}; do
