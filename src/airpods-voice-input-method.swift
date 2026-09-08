@@ -203,11 +203,30 @@ private func isBluetoothMediaRemoteSource(_ sourceID: String?) -> Bool {
     return bluetoothMediaRemoteSenders.contains { sourceID.contains($0) }
 }
 
+private let mediaRemoteSenderOptionKey = "kMRMediaRemoteOptionSenderID"
+
+private func resolvedMediaRemoteSourceID(
+    explicitSourceID: String?, options: [String: Any]?
+) -> String? {
+    if let explicitSourceID {
+        let trimmed = explicitSourceID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isNullPlaceholder = trimmed == "(null)" || trimmed == "(null) ((null))"
+        if !trimmed.isEmpty, !isNullPlaceholder { return explicitSourceID }
+    }
+    return options?[mediaRemoteSenderOptionKey] as? String
+}
+
 private func mediaRemoteSourceID(_ event: MPRemoteCommandEvent) -> String? {
     let object = event as NSObject
     let selector = NSSelectorFromString("sourceID")
-    guard object.responds(to: selector) else { return nil }
-    return object.value(forKey: "sourceID") as? String
+    let sourceID = object.responds(to: selector)
+        ? object.value(forKey: "sourceID") as? String
+        : nil
+    let optionsSelector = NSSelectorFromString("mediaRemoteOptions")
+    let options = object.responds(to: optionsSelector)
+        ? object.value(forKey: "mediaRemoteOptions") as? [String: Any]
+        : nil
+    return resolvedMediaRemoteSourceID(explicitSourceID: sourceID, options: options)
 }
 
 private func processIsRunning(_ pid: pid_t) -> Bool {
@@ -809,6 +828,49 @@ private func runParserTests() -> Bool {
         fputs("MEDIA REMOTE SOURCE TEST FAILED: only AirPods services may trigger voice input\n", stderr)
         return false
     }
+    let nullDeviceBluetoothSource = "SenderDevice = <(null) ((null))>, SenderBundleIdentifier = <com.apple.bluetoothd>, SenderPID = <442>"
+    let bluetoothOptions: [String: Any] = [
+        mediaRemoteSenderOptionKey: bluetoothSource
+    ]
+    let keyboardOptions: [String: Any] = [
+        mediaRemoteSenderOptionKey: keyboardSource
+    ]
+    guard resolvedMediaRemoteSourceID(
+        explicitSourceID: nil, options: bluetoothOptions
+    ) == bluetoothSource else {
+        fputs("MEDIA REMOTE OPTIONS TEST FAILED: Bluetooth sender was not recovered\n", stderr)
+        return false
+    }
+    guard resolvedMediaRemoteSourceID(
+        explicitSourceID: "(null) ((null))", options: bluetoothOptions
+    ) == bluetoothSource else {
+        fputs("MEDIA REMOTE OPTIONS TEST FAILED: null placeholder blocked the sender fallback\n", stderr)
+        return false
+    }
+    guard resolvedMediaRemoteSourceID(
+        explicitSourceID: nil, options: keyboardOptions
+    ) == keyboardSource else {
+        fputs("MEDIA REMOTE OPTIONS TEST FAILED: keyboard sender was not preserved\n", stderr)
+        return false
+    }
+    guard resolvedMediaRemoteSourceID(
+        explicitSourceID: keyboardSource, options: bluetoothOptions
+    ) == keyboardSource else {
+        fputs("MEDIA REMOTE OPTIONS TEST FAILED: explicit sender did not take precedence\n", stderr)
+        return false
+    }
+    guard resolvedMediaRemoteSourceID(
+        explicitSourceID: nullDeviceBluetoothSource, options: nil
+    ) == nullDeviceBluetoothSource else {
+        fputs("MEDIA REMOTE OPTIONS TEST FAILED: valid Bluetooth sender was discarded\n", stderr)
+        return false
+    }
+    guard resolvedMediaRemoteSourceID(
+        explicitSourceID: nil, options: nil
+    ) == nil else {
+        fputs("MEDIA REMOTE OPTIONS TEST FAILED: anonymous event was accepted\n", stderr)
+        return false
+    }
     guard VoiceActivationKey.supportedNames.allSatisfy({ VoiceActivationKey.parse($0) != nil }),
           VoiceActivationKey.parse("OPTION")?.name == "option",
           configuredVoiceKey(arguments: ["app"])?.name == "fn",
@@ -855,6 +917,7 @@ private func runParserTests() -> Bool {
     }
     print("VOICE TIMEOUT TEST PASSED: safety limit is five minutes")
     print("MEDIA SOURCE TEST PASSED: only AirPods remote services are accepted")
+    print("MEDIA OPTIONS TEST PASSED: sender identity survives a missing sourceID")
     print("CONSUMER CONTROL TEST PASSED: only Play/Pause key-down is accepted")
     print("VOICE KEY CONFIG TEST PASSED: supported names parse and default to fn")
     print("CONFIGURABLE MODIFIER TEST PASSED: existing flags survive key down and up")
