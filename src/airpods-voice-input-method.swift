@@ -210,6 +210,10 @@ private func inputLogEvent(in line: String) -> InputLogEvent? {
     return nil
 }
 
+private func isSinglePressOutsideDuplicateWindow(now: Date, last: Date) -> Bool {
+    now.timeIntervalSince(last) >= singlePressDuplicateWindow
+}
+
 private func isBluetoothMediaRemoteSource(_ sourceID: String?) -> Bool {
     guard let sourceID else { return false }
     return bluetoothMediaRemoteSenders.contains { sourceID.contains($0) }
@@ -594,6 +598,12 @@ private final class AirPodsVoiceController {
         case .voiceInputStopped:
             endVoiceKeyHold(reason: "WeType recording stopped")
         case .airPodsMicrophoneButton:
+            let now = Date()
+            guard isSinglePressOutsideDuplicateWindow(now: now, last: lastSinglePress) else {
+                writeLog("Ignored duplicate AirPods microphone button")
+                return
+            }
+            lastSinglePress = now
             endVoiceKeyHold(reason: "AirPods microphone button", submit: true)
         }
     }
@@ -602,7 +612,7 @@ private final class AirPodsVoiceController {
         writeLog("AirPods single press received; recording=\(voiceKeyIsDown)")
         guard isRunning else { return }
         let now = Date()
-        guard now.timeIntervalSince(lastSinglePress) >= singlePressDuplicateWindow else {
+        guard isSinglePressOutsideDuplicateWindow(now: now, last: lastSinglePress) else {
             writeLog("Ignored duplicate AirPods single press")
             return
         }
@@ -826,6 +836,14 @@ private final class AirPodsVoiceController {
 }
 
 private func runParserTests() -> Bool {
+    let duplicateReference = Date(timeIntervalSince1970: 100)
+    guard !isSinglePressOutsideDuplicateWindow(
+        now: duplicateReference.addingTimeInterval(0.349), last: duplicateReference),
+    isSinglePressOutsideDuplicateWindow(
+        now: duplicateReference.addingTimeInterval(0.350), last: duplicateReference) else {
+        fputs("SINGLE PRESS DUPLICATE WINDOW TEST FAILED\n", stderr)
+        return false
+    }
     guard inputLogEvent(
         in: "bluetoothd: Received Software Mute (control cmd 0x27) as unknown from device"
     ) == .airPodsMicrophoneButton,
@@ -945,6 +963,7 @@ private func runParserTests() -> Bool {
         return false
     }
     print("VOICE TIMEOUT TEST PASSED: safety limit is five minutes")
+    print("SINGLE PRESS DUPLICATE WINDOW TEST PASSED")
     print("INPUT LOG EVENT TEST PASSED: AirPods microphone button is recognized")
     print("MEDIA SOURCE TEST PASSED: only AirPods remote services are accepted")
     print("MEDIA OPTIONS TEST PASSED: sender identity survives a missing sourceID")
