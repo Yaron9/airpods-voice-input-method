@@ -57,7 +57,7 @@ wait_for_app_count() {
 
 run_round() {
   local round=$1
-  local bluetooth_before down_before up_before send_before
+  local bluetooth_before down_before up_before send_before stop_trigger_before
   bluetooth_before=$(count_app 'Bluetooth media remote command received')
   down_before=$(count_app 'Voice key fn down')
   up_before=$(count_app 'Voice key fn up; voice input stopped')
@@ -69,8 +69,10 @@ run_round() {
   wait_for_app_count 'Voice key fn down' "$((down_before + 1))" 25 \
     "第 $round 轮收到 AirPods 单击，但 2.5 秒内没有按下 Fn"
 
+  stop_trigger_before=$(count_app 'Bluetooth media remote command received|reason=AirPods microphone button')
   print -- "ROUND $round RECORDING: 请再单击一次 AirPods 停止并发送。"
-  wait_for_app_count 'Bluetooth media remote command received' "$((bluetooth_before + 2))" \
+  wait_for_app_count 'Bluetooth media remote command received|reason=AirPods microphone button' \
+    "$((stop_trigger_before + 1))" \
     "$human_timeout_tenths" "第 $round 轮没有收到停止单击"
   wait_for_app_count 'Voice key fn up; voice input stopped' "$((up_before + 1))" 25 \
     "第 $round 轮停止单击后没有释放 Fn"

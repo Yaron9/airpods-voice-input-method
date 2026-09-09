@@ -29,7 +29,7 @@ AirPods Voice 输入法是一个原生 macOS 菜单栏 App。单击一次 AirPod
 
 1.0 已使用豆包输入法完成实体 AirPods 多轮验收。其他输入法需要支持“按住快捷键录音，松开快捷键结束”。
 
-语音输入法可以选择 Mac 内置麦克风或 AirPods 麦克风。App 会从媒体事件的主字段和备用选项中解析 AirPods 发送方，不依赖当前选中的麦克风。
+语音输入法可以选择 Mac 内置麦克风或 AirPods 麦克风。使用内置麦克风时，两次单击都通过媒体控制事件识别；使用 AirPods 麦克风时，录音期间的第二次单击会变成耳机麦克风按钮事件，App 会识别该事件并停止、提交和发送。
 
 ### 2. 了解 AirPods 单击行为
 
@@ -110,7 +110,7 @@ AIRPODS_VOICE_INPUT_KEY=option ./scripts/start.sh
 
 ## 工作原理
 
-App 运行时通过 `MPRemoteCommandCenter` 持有 Now Playing 会话，从媒体系统接收 AirPods 单击。只接受来源为 macOS AirPods 蓝牙服务 `com.apple.bluetoothd` 或 `com.apple.cloudpaird` 的媒体事件，Mac 键盘播放键等其他来源不会启动语音。IOHID 监听作为备用通道，同一次实体操作通过 350ms 窗口去重。
+App 运行时通过 `MPRemoteCommandCenter` 持有 Now Playing 会话，从媒体系统接收 AirPods 单击。只接受来源为 macOS AirPods 蓝牙服务 `com.apple.bluetoothd` 或 `com.apple.cloudpaird` 的媒体事件，Mac 键盘播放键等其他来源不会启动语音。AirPods 麦克风进入通话音频模式后，第二次单击由 `bluetoothd` 报告为 Software Mute；App 仅在自己已启动的语音会话中将它作为停止并发送信号。IOHID 监听作为备用通道，同一次实体操作通过 350ms 窗口去重。
 
 第一次单击通过 `IOHIDPostEvent` 发送一次 Fn 激活；输入法消费该事件后，App 不会反复重按 Fn。第二次单击结束逻辑录音会话，并依次发送两次回车：第一次确认输入法组合文字，第二次发送消息。
 
