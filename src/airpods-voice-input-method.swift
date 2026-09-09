@@ -15,6 +15,7 @@ private func fnInjectorClose()
 private func fnInjectorMergeFlags(_ current: UInt64, _ down: Int32) -> UInt64
 
 private let weTypeStoppedMarker = "AVCaptureSession_Tundra stopRunning"
+private let airPodsSoftwareMuteMarker = "Received Software Mute (control cmd 0x27)"
 private let logURL = URL(fileURLWithPath: "/tmp/airpods-voice-input-method/app.log")
 private let stopRequestURL = URL(fileURLWithPath:
     ProcessInfo.processInfo.environment["AIRPODS_VOICE_INPUT_STOP_REQUEST_PATH"]
@@ -196,6 +197,17 @@ private func writeLog(_ message: String) {
 
 private func isPlayPausePress(usagePage: UInt32, usage: UInt32, value: Int) -> Bool {
     usagePage == consumerUsagePage && usage == playPauseUsage && value != 0
+}
+
+private enum InputLogEvent: Equatable {
+    case voiceInputStopped
+    case airPodsMicrophoneButton
+}
+
+private func inputLogEvent(in line: String) -> InputLogEvent? {
+    if line.contains(airPodsSoftwareMuteMarker) { return .airPodsMicrophoneButton }
+    if line.contains(weTypeStoppedMarker) { return .voiceInputStopped }
+    return nil
 }
 
 private func isBluetoothMediaRemoteSource(_ sourceID: String?) -> Bool {
@@ -380,7 +392,9 @@ private final class AirPodsVoiceController {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/log")
         process.arguments = [
             "stream", "--style", "compact", "--level", "debug", "--predicate",
-            "process == \"WeType\" AND eventMessage CONTAINS[c] \"AVCaptureSession_Tundra stopRunning\"",
+            "(process == \"WeType\" AND eventMessage CONTAINS[c] \"AVCaptureSession_Tundra stopRunning\") OR "
+                + "(process == \"bluetoothd\" AND eventMessage CONTAINS[c] "
+                + "\"Received Software Mute (control cmd 0x27)\")",
         ]
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
@@ -575,8 +589,13 @@ private final class AirPodsVoiceController {
     }
 
     func handleLogLine(_ line: String) {
-        guard line.contains(weTypeStoppedMarker) else { return }
-        if voiceKeyIsDown { endVoiceKeyHold(reason: "WeType recording stopped") }
+        guard voiceKeyIsDown, let event = inputLogEvent(in: line) else { return }
+        switch event {
+        case .voiceInputStopped:
+            endVoiceKeyHold(reason: "WeType recording stopped")
+        case .airPodsMicrophoneButton:
+            endVoiceKeyHold(reason: "AirPods microphone button", submit: true)
+        }
     }
 
     func handleAirPodsSinglePress() {
@@ -807,6 +826,16 @@ private final class AirPodsVoiceController {
 }
 
 private func runParserTests() -> Bool {
+    guard inputLogEvent(
+        in: "bluetoothd: Received Software Mute (control cmd 0x27) as unknown from device"
+    ) == .airPodsMicrophoneButton,
+    inputLogEvent(
+        in: "WeType AVCaptureSession_Tundra stopRunning"
+    ) == .voiceInputStopped,
+    inputLogEvent(in: "unrelated log line") == nil else {
+        fputs("INPUT LOG EVENT TEST FAILED\n", stderr)
+        return false
+    }
     guard maximumFnHoldDuration == 300 else {
         fputs("VOICE TIMEOUT TEST FAILED: expected a five-minute safety limit\n", stderr)
         return false
@@ -916,6 +945,7 @@ private func runParserTests() -> Bool {
         return false
     }
     print("VOICE TIMEOUT TEST PASSED: safety limit is five minutes")
+    print("INPUT LOG EVENT TEST PASSED: AirPods microphone button is recognized")
     print("MEDIA SOURCE TEST PASSED: only AirPods remote services are accepted")
     print("MEDIA OPTIONS TEST PASSED: sender identity survives a missing sourceID")
     print("CONSUMER CONTROL TEST PASSED: only Play/Pause key-down is accepted")
