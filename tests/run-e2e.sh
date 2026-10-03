@@ -24,7 +24,12 @@ mkdir -p "$result_dir"
 "$project_dir/scripts/build.sh" >/dev/null
 swiftc "$project_dir/tests/return-key-receiver.swift" -framework AppKit -o "$receiver"
 
-"$receiver" "$marker" "$ready" "$expected_cycles" >"$result_dir/receiver.log" 2>&1 &
+receiver_args=("$marker" "$ready" "$expected_cycles")
+if [[ "${AIRPODS_TEST_DELAYED_COMPOSITION:-0}" == 1 ]]; then
+  # writeLog mirrors and flushes each entry to stdout; use this run's capture.
+  receiver_args+=("$result_dir/app.log")
+fi
+"$receiver" "${receiver_args[@]}" >"$result_dir/receiver.log" 2>&1 &
 receiver_pid=$!
 for _ in {1..40}; do
   [[ -e "$ready" ]] && break

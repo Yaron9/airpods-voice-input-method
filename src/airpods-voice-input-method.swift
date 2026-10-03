@@ -23,8 +23,11 @@ private let stopRequestURL = URL(fileURLWithPath:
 private let showRequestURL = URL(fileURLWithPath:
     ProcessInfo.processInfo.environment["AIRPODS_VOICE_INPUT_SHOW_REQUEST_PATH"]
         ?? "/tmp/airpods-voice-input-method/show.request")
-private let finalTextCommitDelay: TimeInterval = 0.50
-private let finalSendDelay: TimeInterval = 0.25
+// Allow the IME to finish recognition before committing, then allow its
+// asynchronous text insertion to reach the terminal before sending Return.
+// These are bounded waits, not confirmation that the IME has finished.
+private let finalTextCommitDelay: TimeInterval = 1.00
+private let finalSendDelay: TimeInterval = 0.50
 private let focusRecoveryRetryInterval: TimeInterval = 0.10
 private let maximumFocusRecoveryRetries = 10
 private let singlePressDuplicateWindow: TimeInterval = 0.35
@@ -1141,7 +1144,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         } else if singleClickCycleTest {
             for cycle in 0..<4 {
-                let start = 0.2 + Double(cycle) * 2.0
+                let start = 0.2 + Double(cycle) * 3.0
                 DispatchQueue.main.asyncAfter(deadline: .now() + start) {
                     controller.handleAirPodsSinglePress()
                 }
@@ -1149,7 +1152,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                     controller.handleAirPodsSinglePress()
                 }
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 8.8) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 12.8) {
                 NSApp.terminate(nil)
             }
         } else if stopStartDuringSubmitTest {
@@ -1179,14 +1182,14 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
                 controller.handleAirPodsSinglePress()
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
                 NSApp.terminate(nil)
             }
         } else if returnTest {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 controller.testReturnDelivery()
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                 NSApp.terminate(nil)
             }
         }
