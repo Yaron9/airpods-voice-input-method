@@ -2,7 +2,7 @@
 
 AirPods Voice 输入法是一个原生 macOS 菜单栏 App。单击一次 AirPods 开始语音输入，再单击一次停止并自动发送，全程不需要触碰键盘。
 
-正式版本：**1.0**
+当前版本：**1.0.2**（[更新记录](CHANGELOG.md)）
 
 ## 功能
 
@@ -42,7 +42,7 @@ App 运行时会接管 AirPods 的播放/暂停单击：
 
 ## 安装
 
-1. 从 GitHub Releases 下载 `AirPods-Voice-Input-Method-1.0-macOS.pkg`。
+1. 从 [GitHub Releases](https://github.com/Yaron9/airpods-voice-input-method/releases/latest) 下载 `AirPods-Voice-Input-Method-1.0.2-macOS.pkg`。
 2. 双击安装包并完成安装。
 3. App 会安装到 `/Applications/AirPods Voice 输入法.app`。
 4. 从系统“应用程序”目录打开 **AirPods Voice 输入法**。
